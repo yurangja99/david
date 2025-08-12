@@ -1,10 +1,10 @@
-# <p align="center"> DAViD: Modeling Dynamic Affordance of 3D Objects using Pre-trained Video Diffusion Models (ICCV 2025)</p>
+# <p align="center"> DAViD: Modeling Dynamic Affordance of 3D Objects Using Pre-trained Video Diffusion Models (ICCV 2025)</p>
 
 ## [Project Page](https://snuvclab.github.io/david/) &nbsp;|&nbsp; [Paper](https://arxiv.org/pdf/2501.08333) 
 
 ![demo.png](./assets/teaser.png)
 
-This is the official code for the paper "DAViD: Modeling Dynamic Affordance of 3D Objects using Pre-trained Video Diffusion Models".
+This is the official code for the paper "DAViD: Modeling Dynamic Affordance of 3D Objects Using Pre-trained Video Diffusion Models".
 
 ## Installation
 
@@ -121,8 +121,8 @@ bash scripts/generate_object_motion.sh --dataset "ComAsset" --category "barbell"
 ## Citation
 ```bibtex
 @misc{david,
-      title={DAViD: Modeling Dynamic Affordance of 3D Objects using Pre-trained Video Diffusion Models}, 
-      author={Hyeonwoo Kim and Sangwon Beak and Hanbyul Joo},
+      title={DAViD: Modeling Dynamic Affordance of 3D Objects Using Pre-trained Video Diffusion Models}, 
+      author={Hyeonwoo Kim and Sangwon Baik and Hanbyul Joo},
       year={2025},
       eprint={2501.08333},
       archivePrefix={arXiv},
