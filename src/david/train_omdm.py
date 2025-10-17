@@ -285,6 +285,14 @@ def train_score(cfg, train_loader, score_agent, teacher_model=None):
                 score_agent.update_learning_rate()
                 
             ''' load data '''
+            # BEFORE:
+            # batch_sample['thetas'].shape = torch.Size([192, 21, 3])
+            # batch_sample['base_rotation'].shape = torch.Size([192, 3, 3])
+            # batch_sample['base_translation'].shape = torch.Size([192, 3])
+            # AFTER:
+            # batch_sample['thetas'].shape = torch.Size([192, 21, 3])
+            # batch_sample['gt_pose'].shape = torch.Size([192, 9])
+            #     Object's 6d rotation + translation
             batch_sample = process_batch(
                 batch_sample = batch_sample, 
                 device=cfg.device, 
@@ -418,7 +426,7 @@ def main():
         exit()
     
     ''' Init data loader '''
-    if not (cfg.eval or cfg.pred):
+    if not (cfg.eval or cfg.pred):  # THIS
         train_loader = get_data_loaders_from_cfg(cfg=cfg)
         print('train_set: ', len(train_loader))
     else:
@@ -428,7 +436,7 @@ def main():
   
     
     ''' Init trianing agent and load checkpoints'''
-    if cfg.agent_type == 'score':
+    if cfg.agent_type == 'score':   # THIS
         cfg.posenet_mode = 'score'
         score_agent = PoseNet(cfg)
         tr_agent = score_agent
@@ -461,17 +469,17 @@ def main():
     
     ''' Load checkpoints '''
     load_model_only = False if cfg.use_pretrain else True
-    if cfg.use_pretrain or cfg.eval or cfg.pred:
+    if cfg.use_pretrain or cfg.eval or cfg.pred:    # SKIP
         tr_agent.load_ckpt(model_dir=cfg.pretrained_model_path, model_path=True, load_model_only=load_model_only)        
                 
     
     ''' Start testing loop'''
-    if cfg.eval:
+    if cfg.eval:    # SKIP
         print("Start inference ...")
         inference(cfg, test_loader, tr_agent)
         print("Inference finished")
         exit()
-    if cfg.pred:
+    if cfg.pred:    # SKIP
         print("Start prediction ...")
         prediction(cfg, test_loader, tr_agent)
         print("Prediction finished")
@@ -479,7 +487,7 @@ def main():
         
         
     ''' Start training loop '''
-    if cfg.agent_type == 'score':
+    if cfg.agent_type == 'score':   # THIS
         train_score(cfg, train_loader, tr_agent)
     elif cfg.agent_type == 'energy':
         if cfg.distillation:

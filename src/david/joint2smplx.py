@@ -8,8 +8,8 @@ import numpy as np
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="ComAsset")
-    parser.add_argument("--category", type=str, default="frypan")
+    parser.add_argument("--dataset", type=str, default="FullBodyManip")
+    parser.add_argument("--category", type=str, default="largetable")
     parser.add_argument("--human_motion_dir", type=str, default="results/inference/human_motion")
     parser.add_argument("--frame_num", type=int, default=None)
 
@@ -21,16 +21,21 @@ if __name__ == '__main__':
 
     params = parser.parse_args()
 
-    data_path = "constants/smplx_handposes.npz"
-    with np.load(data_path, allow_pickle=True) as data:
-        hand_poses = data["hand_poses"].item()
-        (left_hand_pose, right_hand_pose) = hand_poses["relaxed"]
-        hand_pose_relaxed = np.concatenate( (left_hand_pose, right_hand_pose) ).reshape(1, -1)
+    # data_path = "constants/smplx_handposes.npz"
+    # with np.load(data_path, allow_pickle=True) as data:
+    #     hand_poses = data["hand_poses"].item()
+    #     (left_hand_pose, right_hand_pose) = hand_poses["relaxed"]
+    #     hand_pose_relaxed = np.concatenate( (left_hand_pose, right_hand_pose) ).reshape(1, -1)
 
-
-    mp4_pths = glob(f"{params.human_motion_dir}/{params.dataset}/{params.category}/*/*/*.mp4")
+    mp4_pths = sorted(glob(f"{params.human_motion_dir}/{params.dataset}/{params.category}/*/*/*/*.mp4"))
+    print('\n'.join(mp4_pths))
     for input_path in mp4_pths:
         assert input_path.endswith('.mp4')
+
+        # skip 'samples_00_to_00.mp4'
+        if 'samples' in os.path.basename(input_path): continue
+        # skip 'samples00.mp4'
+        if '_' not in os.path.basename(input_path): continue
         
         parsed_name = os.path.basename(input_path).replace('.mp4', '').replace('sample', '').replace('rep', '')
         sample_i, rep_i = [int(e) for e in parsed_name.split('_')]
@@ -48,7 +53,7 @@ if __name__ == '__main__':
         os.makedirs(results_dir)
         os.makedirs(os.path.join(results_dir, "loc"))
 
-        npy2obj = vis_utils.npy2obj(npy_path, sample_i, rep_i, device=params.device, cuda=params.cuda)
+        npy2obj = vis_utils.npy2obj(npy_path, sample_i, rep_i, opt_beta=False, device=params.device, cuda=params.cuda)
 
         print('Saving SMPL params to [{}]'.format(os.path.abspath(out_npy_path)))
         npy_data = npy2obj.save_npy(out_npy_path)
@@ -74,7 +79,8 @@ if __name__ == '__main__':
         animation_trans = trans # frame_num x 3
 
         # No Hand Information !
-        animation_poses[:, -30 * 3:] = hand_pose_relaxed
+        # animation_poses[:, -30 * 3:] = hand_pose_relaxed
+        animation_poses[:, -30 * 3:] = 0.0
 
         to_save = dict(
             poses=animation_poses,

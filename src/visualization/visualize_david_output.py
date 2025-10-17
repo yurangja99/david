@@ -35,16 +35,15 @@ def visualize_david_output(
 ):
     initialize_scene()
    
-    smplx_pose_pths = [sorted(glob(f"{human_motion_dir}/{dataset}/{category}/*/*/*.npz"))[idx]]
-
-    print(smplx_pose_pths)
+    smplx_pose_pths = [sorted(glob(f"{human_motion_dir}/{dataset}/{category}/*/*/*/*.npz"))[idx]]
+    print('\n'.join(smplx_pose_pths))
     for ii, smplx_pose_pth in enumerate(smplx_pose_pths):
         object_motion_pth = smplx_pose_pth.replace(human_motion_dir, object_motion_dir).replace(".npz", ".pkl")
         # add smplx motion
         bpy.ops.preferences.addon_enable(module="smplx_blender_addon")
         bpy.ops.object.smplx_add_animation(filepath=smplx_pose_pth)
-        smplx = bpy.data.objects['SMPLX-neutral_sample00_rep00_smpl_params']
-        smplx.delta_rotation_euler = (-np.pi/2, 0, 0)
+        # smplx = bpy.data.objects['SMPLX-lh-neutral_sample00_rep00_smpl_params']
+        # smplx.delta_rotation_euler = (np.pi/2, 0, np.pi/2)
 
         smplx_poses = np.load(smplx_pose_pth)
         frame_num = smplx_poses["poses"].shape[0]

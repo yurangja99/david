@@ -75,7 +75,7 @@ import natsort
 from pathlib import Path
 
 class npy2obj:
-    def __init__(self, npy_path, sample_idx, rep_idx, device=0, cuda=True):
+    def __init__(self, npy_path, sample_idx, rep_idx, opt_beta=False, device=0, cuda=True):
         self.npy_path = npy_path
         self.motions = np.load(self.npy_path, allow_pickle=True)
         if self.npy_path.endswith('.npz'):
@@ -90,7 +90,7 @@ class npy2obj:
         self.rep_idx = rep_idx
         self.absl_idx = self.rep_idx*self.total_num_samples + self.sample_idx
         self.num_frames = self.motions['motion'][self.absl_idx].shape[-1]
-        self.j2s = joints2smpl(num_frames=self.num_frames, device_id=device, cuda=cuda)
+        self.j2s = joints2smpl(num_frames=self.num_frames, opt_beta=opt_beta, device_id=device, cuda=cuda)
 
         if self.nfeats == 3:
             print(f'Running SMPLify For sample [{sample_idx}], repetition [{rep_idx}], it may take a few minutes.')
@@ -164,6 +164,19 @@ class npy2obj:
         }
         np.save(save_path, data_dict)
 
+        return data_dict
+
+    def get_npy(self):
+        data_dict = {
+            'motion': self.motions['motion'][0, :, :, :self.real_num_frames],
+            'thetas': self.motions['motion'][0, :-1, :, :self.real_num_frames],
+            'root_translation': self.motions['motion'][0, -1, :3, :self.real_num_frames],
+            'faces': self.faces,
+            'vertices': self.vertices[0, :, :, :self.real_num_frames],
+            'text': self.motions['text'][0],
+            'length': self.real_num_frames,
+            'opt_dict': self.opt_dict, # modified
+        }
         return data_dict
 
 def plys2npy(ply_dir, out_dir):

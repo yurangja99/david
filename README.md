@@ -10,6 +10,55 @@ This is the official code for the paper "DAViD: Modeling Dynamic Affordance of 3
 
 To setup the environment for running DAViD, please refer to the instructions provided <a href="INSTALL.md">here</a>.
 
+
+## Datasets
+```
+david
+  ├ animation
+  ├ ...
+  ├ data
+  │  ├ InterAct
+  │  │  ├ sub2_largetable_003.pt
+  │  │  ├ sub2_largetable_005.pt
+  │  │  └ ...
+  │  ├ InterActObjects
+  │  │  ├ objects
+  │  │  │  ├ clothesstand
+  │  │  │  │  ├ clothesstand.obj
+  │  │  │  │  └ sample_points.npy
+  │  │  │  └ floorlamp
+  │  │  │     ├ floorlamp.obj
+  │  │  │     └ sample_points.npy
+  │  │  ├ clothesstand.urdf
+  │  │  ├ floorlamp.urdf
+  │  │  └ ...
+  │  └ omomo_text_anno_json_data
+  │     ├ sub2_largetable_003.json
+  │     ├ sub2_largetable_005.json
+  │     └ ...
+  ├ ...    
+  └ imports
+     ├ ...
+     ├ mdm
+     │  ├ body_models
+     │  │  ├ dmpls
+     │  │  ├ smpl
+     │  │  ├ smplh
+     │  │  └ smplx
+     │  ├ checkpoints
+     │  │  ├ humanml_enc_512_50steps
+     │  │  │  ├ args.json
+     │  │  │  ├ model000750000.pt
+     │  │  │  └ opt000750000.pt
+     │  │  └ t2m
+     │  └ dataset
+     │     ├ HumanML3D
+     │     ├ humanml_opt.txt
+     │     ├ kit_opt.txt
+     │     └ t2m_train.npy
+     └ ...
+```
+
 ## Quick Start
 
 ### 2D HOI Image Generation
@@ -84,12 +133,33 @@ blenderproc debug src/visualization/visualize_4d_hoi_sample.py --dataset "ComAss
 
 ![4dhoi.gif](./assets/4dhoi.gif)
 
+### Preprocess FullBodyManip Dataset
+
+- [TODO] `train_diffusion_manip_window_120_cano_joints24.p` is preprocessed by window size `120`, so motions (max length `442`) are sliced into context-lost sub-motions.
+
+```shell
+python src/david/preprocess_fullbodymanip.py \
+  --inputs data/FullBodyManip/train_diffusion_manip_seq_joints24.p data/FullBodyManip/cano_train_diffusion_manip_window_120_joints24.p data/FullBodyManip/test_diffusion_manip_seq_joints24.p data/FullBodyManip/cano_test_diffusion_manip_window_120_joints24.p \
+  --pose_dir results/david/pose_data \
+  --dataset FullBodyManip \
+  --category largetable
+
+python src/david/preprocess_interact.py \
+  --input_dir data/InterAct \
+  --pose_dir results/david/pose_data \
+  --dataset FullBodyManip \
+  --category largetable
+```
+
 ### Train LoRA for MDM
 
 To train LoRA for MDM (of the given 3D object, barbell), use following command.
 
 ```shell
 bash scripts/train_lora.sh --dataset "ComAsset" --category "barbell" --device 0
+bash scripts/train_lora.sh --dataset "FullBodyManip" --category "largetable" --device 0
+CUDA_VISIBLE_DEVICES=0 python src/david/process_mdm.py --dataset FullBodyManip --category largetable
+CUDA_VISIBLE_DEVICES=0 python src/david/train_lora.py --david_dataset FullBodyManip --category largetable --num_steps 10000
 ```
 
 ### Train Object Motion Diffusion Model
@@ -98,7 +168,17 @@ To train Object Motion Diffusion Model (of the given 3D object, barbell), use fo
 
 ```shell
 bash scripts/train_omdm.sh --dataset "ComAsset" --category "barbell" --device 0
+```
 
+```shell
+# OMOMO largetable
+bash scripts/train_omdm.sh --dataset "FullBodyManip" --category "largetable" --device 0
+```
+
+```shell
+# OMOMO largetable
+CUDA_VISIBLE_DEVICES=0 python src/david/process_omdm.py --dataset FullBodyManip --category largetable
+CUDA_VISIBLE_DEVICES=0 python src/david/train_omdm.py --dataset FullBodyManip --category largetable --n_epochs 100000
 ```
 
 ### Sample Human Motion (Inference)
@@ -107,10 +187,60 @@ bash scripts/train_omdm.sh --dataset "ComAsset" --category "barbell" --device 0
 bash scripts/generate_human_motion.sh --max_seed 5 --dataset "ComAsset" --category "barbell" --device 0
 ```
 
+```shell
+# OMOMO largetable
+bash scripts/generate_human_motion.sh --max_seed 5 --dataset "FullBodyManip" --category "largetable" --device 0
+```
+
+```shell
+# OMOMO largetable (various settings)
+prompts=(
+  "A person runs forward, largetable"
+  "A person runs backward, largetable"
+  "A person side steps, largetable"
+  "A person jumps forward, largetable"
+)
+lora_weight=( 0.9 0.7 0.7 0.7 )
+for epoch in $(seq 2000 2000 10000); do
+    for i in "${!prompts[@]}"; do
+        p="${prompts[i]}"
+        w="${lora_weight[i]}"
+        for seed in $(seq 0 5); do
+            CUDA_VISIBLE_DEVICES=$device python src/david/inference_mdm.py \
+                --david_dataset "FullBodyManip" \
+                --category "largetable" \
+                --text_prompt "$p" \
+                --seed $seed \
+                --num_samples 1 \
+                --num_repetitions 1 \
+                --lora_weight $w \
+                --inference_epoch $epoch
+        done
+    done
+done
+CUDA_VISIBLE_DEVICES=0 python src/david/joint2smplx.py --dataset "FullBodyManip" --category "largetable"
+```
+
 ### Sample Object Motion (Inference)
 
 ```shell
 bash scripts/generate_object_motion.sh --dataset "ComAsset" --category "barbell" --device 0
+```
+
+```shell
+# OMOMO largetable
+bash scripts/generate_object_motion.sh --dataset "FullBodyManip" --category "largetable" --device 0
+```
+
+```shell
+# OMOMO largetable
+CUDA_VISIBLE_DEVICES=0 python src/david/inference_omdm.py --dataset "FullBodyManip" --category "largetable" --inference_contact_threshold 0.05 --inference_epoch 100000
+```
+
+### Visualize DAViD Output (Inference)
+
+```shell
+blenderproc debug src/visualization/visualize_david_output.py --custom-blender-path ../../datasets/blender-3.6.3-linux-x64 --dataset "FullBodyManip" --category "largetable" --idx 0
 ```
 
 ## Regarding Code Release

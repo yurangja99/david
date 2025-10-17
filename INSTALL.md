@@ -31,10 +31,10 @@ pip install --extra-index-url https://miropsota.github.io/torch_packages_builder
 # install visualizers
 pip install blenderproc==2.6.2
 blenderproc pip install tqdm
-[blenderproc pip path] install torch==1.12.1+cu113 torchvision==0.13.1+cu113 torchaudio==0.12.1 --extra-index-url https://download.pytorch.org/whl/cu113
-[blenderproc pip path] install -U fvcore
-[blenderproc pip path] install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu113_pyt1121/download.html
-[blenderproc pip path] install certifi
+blenderproc pip install torch==1.12.1+cu113 torchvision==0.13.1+cu113 torchaudio==0.12.1 --extra-index-url https://download.pytorch.org/whl/cu113
+blenderproc pip install -U fvcore
+blenderproc pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu113_pyt1121/download.html
+blenderproc pip install certifi
 export SSL_CERT_DIR=/etc/ssl/certs/
 
 # install DPVO
@@ -78,7 +78,7 @@ pip install git+https://github.com/openai/CLIP.git
 pip install -e .
 pip install diffusers==0.20.2 accelerate safetensors transformers
 pip install numpy==1.23.1 loguru numba filterpy flatten-dict smplx trimesh==3.23.5 jpeg4py chumpy easydict pickle5 torchgeometry networkx==2.8 pysdf mayavi PyQt5==5.14.2 jupyter yq tqdm supervision Pillow==9.5.0 open3d plyfile openai configer
-pip install pyopengl==3.1.4 pyrender==0.1.45
+pip install pyopengl==3.1.0 pyrender==0.1.45
 pip install segment-anything
 ```
 

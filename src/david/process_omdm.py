@@ -9,6 +9,9 @@ import open3d as o3d
 import os
 import cv2
 from constants.david import SELECTED_INDICES
+from tqdm import tqdm
+from utils.visualize import get_object_vertices, plot_3d_points
+from imports.mdm.data_loaders.humanml.utils import paramUtil
 
 COMPATIBILITY_MATRIX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
 
@@ -23,7 +26,9 @@ def prepare_dataset(
     category,
     hmr_dir,
     hoi_dir,
+    obj_dir,
     hoi_data_dir,
+    joint_dir,
     hand_info,
     skip_done
 ):
@@ -37,42 +42,36 @@ def prepare_dataset(
     elif hand_info == 0:
         hand_category = f"{category}"
 
-    if SELECTED_INDICES.get(dataset, None) is not None and SELECTED_INDICES[dataset].get(category, None) is not None:
-        selected_indices = SELECTED_INDICES[dataset][category]
-    else: selected_indices = None
-
-    hmr_pths_ = sorted(glob(f"{hmr_dir}/{dataset}/{category}/*/*/*.npz"))
-    if selected_indices is not None:
-        hmr_pths = [hmr_pths_[index] for index in selected_indices]
-    else:
-        hmr_pths = hmr_pths_
-
     with open("constants/sampled_human_indices.pkl", "rb") as handle:
         human_sampled_indices = pickle.load(handle)
-    
+
+    joint_pths = sorted(glob(f"{joint_dir}/{dataset}/{category}/*/*/*.npy"))
+    obj_pths = sorted(glob(f"{obj_dir}/{dataset}/{category}/*/*/*.npz"))
+    assert len(joint_pths) == len(obj_pths)
+
     pts = []
     RT = []
     body_poses = []
-    for hmr_pth in hmr_pths:
-
-        print(hmr_pth)
-        obj_data_pth = hmr_pth.replace(hmr_dir, hoi_dir).replace(".npz", ".pkl")
-
-        with open(obj_data_pth, "rb") as handle:
-            obj_data = pickle.load(handle)
-
-        scale = obj_data["obj_scale"]
-        obj_vertices = obj_data["obj_vertices"] * scale
-        # obj_faces = obj_data["obj_faces"]
-        obj_R = obj_data["obj_R"]
-        obj_t = obj_data["obj_t"]
-
-        motion_global = np.load(hmr_pth)
+    for joint_pth, obj_pth in zip(joint_pths, tqdm(obj_pths)):
+        joints = np.load(joint_pth)
+        obj = np.load(obj_pth)
         
+        # object info
+        obj_R = obj['obj_rot']  # [T, 3, 3]
+        obj_t = obj['obj_trans']    # [T, 3]
+        poses = obj['poses']    # [T, 72]
+        trans = obj['trans']    # [T, 3]
+        betas = obj['betas']    # [T, 10]
+        motion_global = {
+            'poses': poses, # [T, 72]
+            'trans': trans, # [T, 3]
+            'betas': betas[0:1],   # [1, 10]
+        }
+
         frame_num = motion_global["poses"].shape[0]
-        smplxmodel = smplx.create(model_path="imports/hmr4d/inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz", model_type="smplx", num_pca_comps=45).cuda()
+        smplxmodel = smplx.create(model_path="imports/mdm/body_models/smplx/SMPLX_NEUTRAL.npz", model_type="smplx", num_pca_comps=45).cuda()
         global_smplxmodel_output = smplxmodel(
-            betas=torch.from_numpy(motion_global["betas"].reshape((1, 10))).repeat((frame_num, 1)).to('cuda').float(),
+            betas=torch.zeros_like(torch.from_numpy(motion_global["betas"].reshape((1, 10))).repeat((frame_num, 1))).to('cuda').float(),
             global_orient=torch.from_numpy(motion_global["poses"][:, :3]).to('cuda').float(),
             body_pose=torch.from_numpy(motion_global["poses"][:, 3 : 3 + 21*3]).to('cuda').float(),
             left_hand_pose=torch.zeros((frame_num, 45), device="cuda").float(),
@@ -86,24 +85,57 @@ def prepare_dataset(
             return_full_pose=True,
         )
         global_vertices = global_smplxmodel_output.vertices.to(torch.float64).cpu().numpy()
+        global_joints = global_smplxmodel_output.joints[:, :].detach().cpu().numpy()
 
-        for frame_vertices, human_euler, frame_obj_R, frame_obj_t, frame_pose in zip(global_vertices, motion_global["poses"][:, :3], obj_R, obj_t, motion_global["poses"][:, 3 : 3 + 21*3]):
+        # human joints/vertices calibration
+        min_y = global_vertices.min(axis=(0, 1))[1]
+        global_vertices[..., 1] -= min_y
+        global_joints[..., 1] -= min_y
+
+        # move object for new wrist positions
+        hand_offset = global_joints[..., 20:22, :] - joints[..., 20:22, :]  # (T, 2, 3)
+        hand_offset = hand_offset.mean(1)   # (T, 3)
+        obj_t_old = obj_t.copy()
+        obj_t = obj_t + hand_offset
+        
+        video_dir = f"{hoi_data_dir}/{dataset}/{hand_category}/videos/"
+        os.makedirs(video_dir, exist_ok=True)
+        seq_name = os.path.basename(os.path.dirname(obj_pth))
+        obj_v = get_object_vertices(
+            torch.from_numpy(obj_t).to(dtype=torch.float32), 
+            torch.from_numpy(obj_R).to(dtype=torch.float32), 
+            h=0.15,
+        ).detach().cpu().numpy()
+        obj_v_old = get_object_vertices(
+            torch.from_numpy(obj_t_old).to(dtype=torch.float32), 
+            torch.from_numpy(obj_R).to(dtype=torch.float32), 
+            h=0.15,
+        ).detach().cpu().numpy()
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints_gt.mp4"), paramUtil.t2m_kinematic_chain, joints, obj_v_old[:joints.shape[0]], title="Joints(GT)", dataset="humanml", fps=30, show_joints=False)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints.mp4"), paramUtil.t2m_kinematic_chain, global_joints, obj_v, title="Joints", dataset="humanml", fps=30, show_joints=False)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_all.mp4"), [], global_vertices[:, ::50], obj_v, title="Vertices(All)", dataset="humanml", fps=30, show_joints=True)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_selected.mp4"), [], global_vertices[:, human_sampled_indices], obj_v, title="Vertices(Hands)", dataset="humanml", fps=30, show_joints=True)
+
+        for frame_vertices, frame_joints, human_euler, frame_obj_R, frame_obj_t, frame_pose in zip(global_vertices, global_joints, motion_global["poses"][:, :3], obj_R, obj_t, motion_global["poses"][:, 3 : 3 + 21*3]):
             sampled_vertices = frame_vertices[human_sampled_indices]
 
             human_R, _ = cv2.Rodrigues(human_euler)
-            mean = np.mean(sampled_vertices, axis=0)
+            # mean = np.mean(sampled_vertices, axis=0)
+            mean = np.array(frame_joints[0])    # pelvis joint
             normalized_vertices = sampled_vertices - mean.reshape((1, 3)) # 1024 x 3
             fully_normalized_vertices = normalized_vertices @ (human_R.T).T
+            normalized_all_vertices = frame_vertices - mean.reshape((1, 3))
+            fully_normalized_all_vertices = normalized_all_vertices @ (human_R.T).T
 
-            compatible_frame_obj_R = human_R.T @ COMPATIBILITY_MATRIX @ frame_obj_R # 3 x 3
-            compatible_frame_obj_t = human_R.T @ (COMPATIBILITY_MATRIX @ frame_obj_t - mean.reshape((3, 1))) # 3 x 1
+            compatible_frame_obj_R = human_R.T @ frame_obj_R # 3 x 3. Already transformed, so no transformation
+            compatible_frame_obj_t = human_R.T @ (frame_obj_t.reshape((3, 1)) - mean.reshape((3, 1))) # 3 x 1. Already transformed, so no transformation
 
             compatible_frame_obj_Rt = np.concatenate((compatible_frame_obj_R, compatible_frame_obj_t), axis=1) # 3 x 4
 
             pts.append(fully_normalized_vertices)
             RT.append(compatible_frame_obj_Rt)
             body_poses.append(frame_pose.reshape((21, 3)))
-
+    
     pts = np.array(pts) # N x 1024 x 3
     RT = np.array(RT) # N x 3 x 4
     body_poses = np.array(body_poses) # N x 63 x 3
@@ -123,11 +155,13 @@ def prepare_dataset(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset", type=str, default="ComAsset")
-    parser.add_argument("--category", type=str, default="frypan")
+    parser.add_argument("--dataset", type=str, default="FullBodyManip")
+    parser.add_argument("--category", type=str, default="largetable")
     parser.add_argument("--hmr_dir", type=str, default="results/generation/hmr")
     parser.add_argument("--hoi_dir", type=str, default="results/generation/hoi")
+    parser.add_argument("--obj_dir", type=str, default="results/david/obj_data")
     parser.add_argument("--hoi_data_dir", type=str, default="results/david/hoi_data")
+    parser.add_argument("--joint_dir", type=str, default="results/david/pose_data")
     parser.add_argument("--hand_info", type=int, default=0)
 
     parser.add_argument("--skip_done", action="store_true")
@@ -139,7 +173,9 @@ if __name__ == "__main__":
         category=args.category,
         hmr_dir=args.hmr_dir,
         hoi_dir=args.hoi_dir,
+        obj_dir=args.obj_dir,
         hoi_data_dir=args.hoi_data_dir,
+        joint_dir=args.joint_dir,
         hand_info=args.hand_info,
         skip_done=args.skip_done
     )

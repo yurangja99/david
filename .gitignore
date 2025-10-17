@@ -214,3 +214,8 @@ camera_obj/
 rebuttal/
 smplx_blender_addon/
 *.h5
+
+# for DAViD
+!constants/sampled_human_indices.pkl
+imports/mdm/checkpoints/humanml_enc_512_50steps/args.json
+imports/mdm/dataset/HumanML3D

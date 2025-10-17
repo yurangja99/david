@@ -9,7 +9,8 @@ def category2object(dataset, category):
     elif dataset == ASSETS.INTERCAP:
         object_path = glob(f"data/INTERCAP/objects/{category}/mesh.obj")[0]
     elif dataset == ASSETS.FULLBODYMANIP:
-        object_path = glob(f"data/FullBodyManip/captured_objects/{category}_cleaned_simplified.obj")[0]
+        # object_path = glob(f"data/FullBodyManip/captured_objects/{category}_cleaned_simplified.obj")[0]
+        object_path = glob(f"data/InterActObjects/objects/{category}/{category}.obj")[0]
     elif dataset == ASSETS.SAPIEN:
         object_path = glob(f"data/SAPIEN/{category}/*/model.obj")[0]
     else: raise ValueError(f"Inappropriate Dataset: {dataset}")

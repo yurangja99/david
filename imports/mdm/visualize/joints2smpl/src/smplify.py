@@ -52,6 +52,7 @@ class SMPLify3D():
                  use_collision=False,
                  use_lbfgs=True,
                  joints_category="orig",
+                 opt_beta=False,
                  device=torch.device('cuda:0'),
                  ):
 
@@ -90,6 +91,9 @@ class SMPLify3D():
             self.smpl_index = None 
             self.corr_index = None
             print("NO SUCH JOINTS CATEGORY!")
+        
+        # optimize beta or not?
+        self.opt_beta = opt_beta
 
     # ---- get the man function here ------
     def __call__(self, init_pose, init_betas, init_cam_t, j3d, conf_3d=1.0, seq_ind=0):
@@ -204,7 +208,8 @@ class SMPLify3D():
         camera_translation.requires_grad = True
 
         # --- if we use the sequence, fix the shape
-        if seq_ind == 0:
+        # if seq_ind == 0:
+        if self.opt_beta:
             betas.requires_grad = True
             body_opt_params = [body_pose, betas, global_orient, camera_translation]
         else:

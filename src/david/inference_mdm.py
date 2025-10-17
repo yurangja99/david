@@ -247,7 +247,9 @@ def load_dataset(args, max_frames, n_frames):
                               batch_size=args.batch_size,
                               num_frames=max_frames,
                               split='test',
-                              hml_mode='text_only')
+                              hml_mode='text_only',
+                              david_dataset=args.david_dataset,
+                              david_category=args.category)
     if args.dataset in ['kit', 'humanml']:
         data.dataset.t2m_dataset.fixed_length = n_frames
     return data
@@ -266,8 +268,8 @@ if __name__ == "__main__":
 
     group = parser.add_argument_group('david')
     group.add_argument("--inference_epoch", type=int, default=2000)
-    group.add_argument("--david_dataset", type=str, default="ComAsset")
-    group.add_argument("--category", type=str, default="frypan")
+    group.add_argument("--david_dataset", type=str, default="FullBodyManip")
+    group.add_argument("--category", type=str, default="largetable")
     group.add_argument("--lora_dir", type=str, default="results/david/lora")
     group.add_argument("--human_motion_dir", type=str, default="results/inference/human_motion")
     group.add_argument("--lora_weight", type=float, default=0.9)
@@ -276,7 +278,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.is_train = False
     args.model_path = f"{args.lora_dir}/{args.david_dataset}/{args.category}/model{750000 + args.inference_epoch:09d}.pt"
-    args.output_dir = f"{args.human_motion_dir}/{args.david_dataset}/{args.category}/{args.text_prompt}/seed:{args.seed:05d}"
+    args.output_dir = f"{args.human_motion_dir}/{args.david_dataset}/{args.category}/human{args.inference_epoch:09d}/{args.text_prompt.replace(', ', ',').replace(' ', '_')}/seed{args.seed:05d}"
 
     if args.skip_done and os.path.exists(args.output_dir): pass
     else: main(args)

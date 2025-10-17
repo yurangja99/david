@@ -99,9 +99,9 @@ class GFObjectPose(nn.Module):
         return pts_feat
     
     def extract_theta_feature(self, data):
-        thetas = data['thetas'] # bs x 63 x 3
+        thetas = data['thetas'] # bs x 63 x 3 (for DAViD, bs x 21 x 3)
         print(f"thetas: {thetas.shape}")
-        theta_feat = self.theta_encoder(thetas.reshape((thetas.shape[0], -1))) # bs x 189
+        theta_feat = self.theta_encoder(thetas.reshape((thetas.shape[0], -1))) # bs x 189 (for DAViD, bs x 63)
         return theta_feat
 
    

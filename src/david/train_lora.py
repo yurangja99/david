@@ -71,8 +71,8 @@ if __name__ == "__main__":
     add_training_options(parser)
 
     group = parser.add_argument_group('david')
-    group.add_argument("--david_dataset", type=str, default="ComAsset")
-    group.add_argument("--category", type=str, default="barbell")
+    group.add_argument("--david_dataset", type=str, default="FullbodyManip")
+    group.add_argument("--category", type=str, default="largetable")
     group.add_argument("--checkpont_save_dir", type=str, default="results/david/lora")
     group.add_argument("--skip_done", action="store_true")
 

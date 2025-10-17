@@ -7,6 +7,7 @@ from tqdm import tqdm
 from glob import glob
 import smplx
 import argparse
+import shutil
 
 from imports.mdm.human_body_prior.tools.omni_tools import copy2cpu as c2c
 from imports.mdm.human_body_prior.body_model.body_model import BodyModel
@@ -31,6 +32,9 @@ from tqdm import tqdm
 import os
 from glob import glob
 
+from utils.visualize import plot_3d_points
+from imports.mdm.data_loaders.humanml.utils import paramUtil
+
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
 comp_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 neutral_bm_path = './imports/mdm/body_models/smplh/neutral/model.npz'
@@ -38,7 +42,7 @@ neutral_dmpl_path = './imports/mdm/body_models/dmpls/neutral/model.npz'
 num_betas = 10
 num_dmpls = 8 
 bm = BodyModel(bm_fname=neutral_bm_path, num_betas=num_betas, num_dmpls=num_dmpls, dmpl_fname=neutral_dmpl_path).to(comp_device)
-smplxmodel = smplx.create(model_path="imports/hmr4d/inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz", model_type="smplx", num_pca_comps=45).cpu()
+smplxmodel = smplx.create(model_path="imports/mdm/body_models/smplx/SMPLX_NEUTRAL.npz", model_type="smplx", num_pca_comps=45).cpu()
 trans_matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
 
 
@@ -372,6 +376,8 @@ def prepare_mdm_dataset(hmr_dir, pose_dir, new_joints_dir, new_joint_vecs_dir, m
         f.write(file_name + "\n")
     f.close()
 
+    shutil.copy2("constants/humanml_opt.txt", f"{mdm_dir}/{dataset}/{category}/humanml_opt.txt")
+
     mean_pth = "imports/mdm/dataset/HumanML3D/Mean.npy"
     train_data_mean_pth = f"{mdm_dir}/{dataset}/{category}/Mean.npy"
     std_pth = "imports/mdm/dataset/HumanML3D/Std.npy"
@@ -401,7 +407,7 @@ def process_mdm(
 
 
     pose_data_pths = glob(f"{pose_dir}/{dataset}/{category}/*/*/*.npy")
-    for pose_data_pth in tqdm(pose_data_pths):
+    for ii, pose_data_pth in enumerate(tqdm(pose_data_pths)):
         
         source_data = np.load(pose_data_pth)[:, :joints_num]
         data, ground_positions, positions, l_velocity = process_file(source_data, 0.002)
@@ -415,14 +421,18 @@ def process_mdm(
         np.save(new_joint_path, rec_ric_data.squeeze().numpy())
         np.save(new_joint_vec_path, data)
 
+        ani_path = os.path.join(mdm_dir, dataset, category, "animation", f"{ii:06d}.mp4")
+        os.makedirs(os.path.dirname(ani_path), exist_ok=True)
+        plot_3d_points(ani_path, paramUtil.t2m_kinematic_chain, rec_ric_data.squeeze().numpy(), [], title="Joints", dataset="humanml", fps=30, show_joints=False)
+
     prepare_mdm_dataset(hmr_dir, pose_dir, new_joints_dir, new_joint_vecs_dir, mdm_dir, dataset, category)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset", type=str, default="ComAsset")
-    parser.add_argument("--category", type=str, default="barbell")
+    parser.add_argument("--dataset", type=str, default="FullBodyManip")
+    parser.add_argument("--category", type=str, default="largetable")
     parser.add_argument("--hmr_dir", type=str, default="results/generation/hmr")
     parser.add_argument("--pose_dir", type=str, default="results/david/pose_data")
     parser.add_argument("--new_joints_dir", type=str, default="results/david/new_joints")
