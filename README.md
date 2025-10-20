@@ -18,8 +18,11 @@ david
   ├ ...
   ├ data
   │  ├ InterAct
-  │  │  ├ sub2_largetable_003.pt
-  │  │  ├ sub2_largetable_005.pt
+  │  │  ├ ...
+  │  │  ├ largetable_two_hand_carry
+  │  │  │  ├ sub2_largetable_003.pt
+  │  │  │  ├ sub2_largetable_005.pt
+  │  │  │  └ ...
   │  │  └ ...
   │  ├ InterActObjects
   │  │  ├ objects
@@ -135,106 +138,48 @@ blenderproc debug src/visualization/visualize_4d_hoi_sample.py --dataset "ComAss
 
 ### Preprocess FullBodyManip Dataset
 
-- [TODO] `train_diffusion_manip_window_120_cano_joints24.p` is preprocessed by window size `120`, so motions (max length `442`) are sliced into context-lost sub-motions.
+Refer to [scripts/preprocess_interact.sh](./scripts/preprocess_interact.sh)
 
 ```shell
-python src/david/preprocess_fullbodymanip.py \
-  --inputs data/FullBodyManip/train_diffusion_manip_seq_joints24.p data/FullBodyManip/cano_train_diffusion_manip_window_120_joints24.p data/FullBodyManip/test_diffusion_manip_seq_joints24.p data/FullBodyManip/cano_test_diffusion_manip_window_120_joints24.p \
-  --pose_dir results/david/pose_data \
-  --dataset FullBodyManip \
-  --category largetable
-
-python src/david/preprocess_interact.py \
-  --input_dir data/InterAct \
-  --pose_dir results/david/pose_data \
-  --dataset FullBodyManip \
-  --category largetable
+bash scripts/preprocess_interact.sh
 ```
 
 ### Train LoRA for MDM
 
 To train LoRA for MDM (of the given 3D object, barbell), use following command.
 
+Refer to [scripts/process_mdm.sh](./scripts/process_mdm.sh) and [scripts/train_lora.sh](./scripts/train_lora.sh)
+
 ```shell
-bash scripts/train_lora.sh --dataset "ComAsset" --category "barbell" --device 0
-bash scripts/train_lora.sh --dataset "FullBodyManip" --category "largetable" --device 0
-CUDA_VISIBLE_DEVICES=0 python src/david/process_mdm.py --dataset FullBodyManip --category largetable
-CUDA_VISIBLE_DEVICES=0 python src/david/train_lora.py --david_dataset FullBodyManip --category largetable --num_steps 10000
+bash scripts/process_mdm.sh
+bash scripts/train_lora.sh
 ```
 
 ### Train Object Motion Diffusion Model
 
 To train Object Motion Diffusion Model (of the given 3D object, barbell), use following command.
 
-```shell
-bash scripts/train_omdm.sh --dataset "ComAsset" --category "barbell" --device 0
-```
+Refer to [scripts/process_omdm.sh](./scripts/process_omdm.sh) and [scripts/train_omdm.sh](./scripts/train_omdm.sh)
 
 ```shell
-# OMOMO largetable
-bash scripts/train_omdm.sh --dataset "FullBodyManip" --category "largetable" --device 0
-```
-
-```shell
-# OMOMO largetable
-CUDA_VISIBLE_DEVICES=0 python src/david/process_omdm.py --dataset FullBodyManip --category largetable
-CUDA_VISIBLE_DEVICES=0 python src/david/train_omdm.py --dataset FullBodyManip --category largetable --n_epochs 100000
+bash scripts/process_omdm.sh
+bash scripts/train_omdm.sh
 ```
 
 ### Sample Human Motion (Inference)
 
-```shell
-bash scripts/generate_human_motion.sh --max_seed 5 --dataset "ComAsset" --category "barbell" --device 0
-```
+Refer to [scripts/inference_mdm.sh](./scripts/inference_mdm.sh)
 
 ```shell
-# OMOMO largetable
-bash scripts/generate_human_motion.sh --max_seed 5 --dataset "FullBodyManip" --category "largetable" --device 0
-```
-
-```shell
-# OMOMO largetable (various settings)
-prompts=(
-  "A person runs forward, largetable"
-  "A person runs backward, largetable"
-  "A person side steps, largetable"
-  "A person jumps forward, largetable"
-)
-lora_weight=( 0.9 0.7 0.7 0.7 )
-for epoch in $(seq 2000 2000 10000); do
-    for i in "${!prompts[@]}"; do
-        p="${prompts[i]}"
-        w="${lora_weight[i]}"
-        for seed in $(seq 0 5); do
-            CUDA_VISIBLE_DEVICES=$device python src/david/inference_mdm.py \
-                --david_dataset "FullBodyManip" \
-                --category "largetable" \
-                --text_prompt "$p" \
-                --seed $seed \
-                --num_samples 1 \
-                --num_repetitions 1 \
-                --lora_weight $w \
-                --inference_epoch $epoch
-        done
-    done
-done
-CUDA_VISIBLE_DEVICES=0 python src/david/joint2smplx.py --dataset "FullBodyManip" --category "largetable"
+bash scripts/inference_mdm.sh
 ```
 
 ### Sample Object Motion (Inference)
 
-```shell
-bash scripts/generate_object_motion.sh --dataset "ComAsset" --category "barbell" --device 0
-```
+Refer to [scripts/inference_omdm.sh](./scripts/inference_omdm.sh)
 
 ```shell
-# OMOMO largetable
-bash scripts/generate_object_motion.sh --dataset "FullBodyManip" --category "largetable" --device 0
-```
-
-```shell
-# OMOMO largetable
-CUDA_VISIBLE_DEVICES=0 python src/david/inference_omdm.py --dataset "FullBodyManip" --category "largetable" --inference_contact_threshold 0.05 --inference_epoch 100000
+bash scripts/inference_omdm.sh
 ```
 
 ### Visualize DAViD Output (Inference)

@@ -190,9 +190,9 @@ def main(args):
             # Credit for visualization: https://github.com/EricGuo5513/text-to-motion
             rep_files.append(animation_save_path)
 
-        sample_files = save_multiple_samples(args, out_path,
-                                               row_print_template, all_print_template, row_file_template, all_file_template,
-                                               caption, num_samples_in_out_file, rep_files, sample_files, sample_i)
+        # sample_files = save_multiple_samples(args, out_path,
+        #                                        row_print_template, all_print_template, row_file_template, all_file_template,
+        #                                        caption, num_samples_in_out_file, rep_files, sample_files, sample_i)
 
     abs_path = os.path.abspath(out_path)
     print(f'[Done] Results are at [{abs_path}]')

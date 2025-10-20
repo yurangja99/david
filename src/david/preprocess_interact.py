@@ -6,9 +6,11 @@ from imports.mdm.visualize import vis_utils
 from imports.mdm.data_loaders.humanml.utils import paramUtil
 from utils.visualize import plot_3d_points, get_object_vertices
 from pytorch3d.transforms import quaternion_to_matrix
+SKELETON = paramUtil.t2m_kinematic_chain + paramUtil.t2m_left_hand_chain + paramUtil.t2m_right_hand_chain
 
 def normalize(s: str) -> str:
     # 대소문자/언더스코어/하이픈/띄어쓰기 차이를 없애기 위한 정규화
+    s = s.split("_")[0]
     return ''.join(ch for ch in s.lower() if ch.isalnum())
 
 def extract_category_from_seq_name(seq_name: str) -> str:
@@ -69,12 +71,11 @@ def main():
     total_saved = 0
     total_seen = 0
     category = {}
-    for p in os.listdir(args.input_dir):
-        data = torch.load(os.path.join(args.input_dir, p))
+    for p in os.listdir(os.path.join(args.input_dir, args.category)):
+        data = torch.load(os.path.join(args.input_dir, args.category, p))
 
         seq_name = p.replace(".pt", "")
-        if seq_name not in ['sub2_largetable_003', 'sub2_largetable_005', 'sub2_largetable_012']:
-            continue
+        split = "eval" if "sub16" in seq_name or "sub17" in seq_name else "train"
         total_seen += 1
 
         cat = extract_category_from_seq_name(seq_name)
@@ -111,7 +112,7 @@ def main():
         jpos22 = jpos52[:, [0, 1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12, 14, 33, 13, 15, 34, 16, 35, 17, 36], :]
         jpos22 = COMPATIBILITY_MATRIX @ jpos22[..., None]
         jpos22 = jpos22[..., 0]
-        out_dir = Path(args.pose_dir) / args.dataset / args.category / 'train' / f'{seq_name}'
+        out_dir = Path(args.pose_dir) / args.dataset / args.category / split / f'{seq_name}'
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "000000.npy"
         np.save(out_path.as_posix(), jpos22)
@@ -137,9 +138,11 @@ def main():
         
         obj_trans = COMPATIBILITY_MATRIX @ obj_trans[..., None]
         obj_trans = obj_trans[..., 0]
-        obj_rot = (COMPATIBILITY_MATRIX @ (obj_rot @ ROT_OFS) @ COMPATIBILITY_MATRIX.T)
+        # obj_rot = (COMPATIBILITY_MATRIX @ (obj_rot @ ROT_OFS) @ COMPATIBILITY_MATRIX.T)
+        NEW_ROT_OFS = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])    # x축 기준 -90도 회전
+        obj_rot = NEW_ROT_OFS @ obj_rot
         
-        obj_dir = Path(args.obj_dir) / args.dataset / args.category / 'train' / f'{seq_name}'
+        obj_dir = Path(args.obj_dir) / args.dataset / args.category / split / f'{seq_name}'
         obj_dir.mkdir(parents=True, exist_ok=True)
         obj_path = obj_dir / "000000.npz"
         np.savez(
@@ -155,13 +158,13 @@ def main():
         obj_vertices = get_object_vertices(
             torch.from_numpy(obj_trans).to(torch.float32), 
             torch.from_numpy(obj_rot).to(torch.float32), 
-            h=0.15
+            object=target_cat_norm,
         ).detach().cpu().numpy()
         ani_path = obj_dir / "000000.mp4"
         plot_3d_points(
             ani_path.as_posix(), 
-            paramUtil.t2m_kinematic_chain, 
-            jpos22, obj_vertices, 
+            SKELETON, jpos22, 
+            target_cat_norm, obj_vertices, 
             title="Joints and Object", 
             dataset="humanml", fps=30, show_joints=False
         )

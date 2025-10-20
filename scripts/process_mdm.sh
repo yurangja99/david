@@ -8,11 +8,8 @@ categories=(
   "smallbox_two_hand_carry"
   "smallbox_two_hand_drag"
 )
-export CUDA_VISIBLE_DEVICES=0
 for i in "${!categories[@]}"; do
-  nohup python -u src/david/train_omdm.py \
+  CUDA_VISIBLE_DEVICES=0 python src/david/process_mdm.py \
     --dataset FullBodyManip \
-    --category ${categories[i]} \
-    --n_epochs 100000 \
-    > logs/train_omdm_${categories[i]}.out 2>&1 &
+    --category ${categories[i]}
 done

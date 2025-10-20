@@ -7,23 +7,49 @@ from textwrap import wrap
 import torch
 from pytorch3d.transforms import quaternion_to_matrix
 
-
-def get_object_vertices(pos, rot, hu=0.09, hl=0.36, w=0.28, h=0.1):
+OBJECT_KINEMATICS = {
+    "largetable": [(0, 2), (1, 3), (2, 3), (2, 6), (3, 7), (4, 6), (5, 7), (6, 7)],
+    "clothesstand": [(0, 1), (1, 2), (1, 3), (1, 4), (1, 5)],
+    "smallbox": [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3), (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)],
+}
+def get_object_vertices(pos, rot, object="largetable"):
     T = pos.shape[0]
     R = rot
-    offsets = torch.tensor([
-        [-w, -hl, -w],
-        [-w, -hl,  w],
-        [-w,  hu, -w],
-        [-w,  hu,  w],
-        [ w, -hl, -w],
-        [ w, -hl,  w],
-        [ w,  hu, -w],
-        [ w,  hu,  w],
-    ], dtype=torch.float32).unsqueeze(0).expand(T, -1, -1)  # (T, 8, 3)
+    if object == "largetable":
+        hu, hl, w = 0.09, 0.36, 0.28
+        offsets = torch.tensor([
+            [-w, -hl, -w],
+            [-w, -hl,  w],
+            [-w,  hu, -w],
+            [-w,  hu,  w],
+            [ w, -hl, -w],
+            [ w, -hl,  w],
+            [ w,  hu, -w],
+            [ w,  hu,  w],
+        ], dtype=torch.float32).unsqueeze(0).expand(T, -1, -1)  # (T, 8, 3)
+    elif object == "clothesstand":
+        offsets = torch.tensor([
+            [ 0.75748584, -0.9570913 , -0.20249086],    # top
+            [-0.31622088,  0.40539299,  0.08523018],    # bottom center
+            [-0.41252733,  0.30123311,  0.2233453],     # bottom square
+            [-0.44069129,  0.33733911, -0.05288494],    # bottom square
+            [-0.19175047,  0.47344687,  0.2233453],     # bottom square
+            [-0.21991443,  0.50955287, -0.05288494],    # bottom square
+        ], dtype=torch.float32).unsqueeze(0).expand(T, -1, -1)  # (T, 8, 3)
+    elif object == "smallbox":
+        offsets = torch.tensor([
+            [-0.20109183,  0.09395005,  0.02345553],
+            [-0.18586666,  0.05281884, -0.1272752 ],
+            [ 0.00053567,  0.22285539,  0.0086462 ],
+            [ 0.01576084,  0.18172418, -0.14208453],
+            [-0.01115937, -0.19196568,  0.12066076],
+            [ 0.0040658 , -0.23309689, -0.03006997],
+            [ 0.19046813, -0.06306034,  0.10585143],
+            [ 0.2056933 , -0.10419156, -0.0448793 ],
+        ], dtype=torch.float32).unsqueeze(0).expand(T, -1, -1)  # (T, 8, 3)
     return torch.bmm(offsets, R.transpose(1, 2)) + pos.unsqueeze(1)
 
-def plot_3d_points(save_path, kinematic_tree, joints, obj_points, title, dataset, figsize=(3, 3), fps=120, radius=3, show_joints=True):
+def plot_3d_points(save_path, kinematic_tree, joints, object_name, obj_points, title, dataset, figsize=(3, 3), fps=120, radius=3, show_joints=True):
     matplotlib.use('Agg')
 
     title = '\n'.join(wrap(title, 20))
@@ -50,7 +76,7 @@ def plot_3d_points(save_path, kinematic_tree, joints, obj_points, title, dataset
 
     data = joints.copy().reshape(len(joints), -1, 3)
     obj_data = None
-    if obj_points is not None and len(obj_points) > 0:
+    if object_name is not None and obj_points is not None and len(obj_points) > 0:
         obj_data = obj_points.copy().reshape(len(obj_points), -1, 3)
 
     # preparation related to specific datasets
@@ -119,9 +145,7 @@ def plot_3d_points(save_path, kinematic_tree, joints, obj_points, title, dataset
             )
         if obj_data is not None:
             ax.scatter(obj_data[index, :, 0], obj_data[index, :, 1], obj_data[index, :, 2], color=colors_blue[0], s=3, alpha=0.2)
-        if obj_data is not None and obj_data.shape[1] == 8:
-            for pair in [(0, 2), (1, 3), (2, 3),
-                         (2, 6), (3, 7), (4, 6), (5, 7), (6, 7)]:
+            for pair in OBJECT_KINEMATICS[object_name]:
                 linewidth = 2.0
                 ax.plot3D(
                     obj_data[index, pair, 0],

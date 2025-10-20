@@ -280,11 +280,16 @@ def main():
         )
         
         # obj_rot: data[:, 321:325] (xyzw quat)
-        COMPATIBILITY_MATRIX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
-        ROT_OFS = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
-        ROT_OFS_INV = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        # COMPATIBILITY_MATRIX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+        # ROT_OFS = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        # ROT_OFS_INV = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        # data[:, [324, 321, 322, 323]] = matrix_to_quaternion(
+        #     torch.from_numpy(COMPATIBILITY_MATRIX.T @ obj_motion["R"][:frame_num] @ COMPATIBILITY_MATRIX @ ROT_OFS_INV).float()
+        # )
+        NEW_ROT_OFS = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])    # x축 기준 -90도 회전
+        NEW_ROT_OFS_INV = np.linalg.inv(NEW_ROT_OFS)
         data[:, [324, 321, 322, 323]] = matrix_to_quaternion(
-            torch.from_numpy(COMPATIBILITY_MATRIX.T @ obj_motion["R"][:frame_num] @ COMPATIBILITY_MATRIX @ ROT_OFS_INV).float()
+            torch.from_numpy(NEW_ROT_OFS_INV @ obj_motion["R"][:frame_num]).float()
         )
         
         # contact_obj: data[:, 330:331]

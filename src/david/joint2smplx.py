@@ -10,6 +10,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="FullBodyManip")
     parser.add_argument("--category", type=str, default="largetable")
+    parser.add_argument("--epoch", type=int, default=1000)
+    parser.add_argument("--task", type=str, default="A_person_runs_fast_forward")
     parser.add_argument("--human_motion_dir", type=str, default="results/inference/human_motion")
     parser.add_argument("--frame_num", type=int, default=None)
 
@@ -27,7 +29,8 @@ if __name__ == '__main__':
     #     (left_hand_pose, right_hand_pose) = hand_poses["relaxed"]
     #     hand_pose_relaxed = np.concatenate( (left_hand_pose, right_hand_pose) ).reshape(1, -1)
 
-    mp4_pths = sorted(glob(f"{params.human_motion_dir}/{params.dataset}/{params.category}/*/*/*/*.mp4"))
+    params.task = params.task.replace(" ", "_")
+    mp4_pths = sorted(glob(f"{params.human_motion_dir}/{params.dataset}/{params.category}/human{params.epoch:09d}/{params.task},{params.category}/*/*.mp4"))
     print('\n'.join(mp4_pths))
     for input_path in mp4_pths:
         assert input_path.endswith('.mp4')

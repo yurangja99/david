@@ -1,41 +1,18 @@
-skip_done=false
-
-# Function to parse arguments and set values
-parse_args() {
-  while [[ $# -gt 0 ]]; do
-    case $1 in
-      --device)
-        device="$2"
-        shift 2
-        ;;
-      --dataset)
-        dataset="$2"
-        shift 2
-        ;;
-      --category)
-        category="$2"
-        shift 2
-        ;;
-      --skip_done)
-        skip_done=true
-        shift 1
-        ;;
-      *)
-        echo "Unknown option: $1"
-        exit 1
-        ;;
-    esac
-  done
-}
-
-# Call the function to parse command-line arguments
-parse_args "$@"
-
-if [ "$skip_done" = true ]; then
-    CUDA_VISIBLE_DEVICES=$device python src/david/process_mdm.py 
-    CUDA_VISIBLE_DEVICES=$device python src/david/train_lora.py --david_dataset $dataset --category $category  --overwrite
-else
-    CUDA_VISIBLE_DEVICES=$device python src/david/process_mdm.py 
-    CUDA_VISIBLE_DEVICES=$device python src/david/train_lora.py --david_dataset $dataset --category $category  --overwrite
-fi
-
+categories=(
+  "clothesstand_left_hand"
+  "clothesstand_right_hand"
+  "clothesstand_two_hand"
+  "largetable_two_hand_carry"
+  "largetable_two_hand_drag"
+  "largetable_two_hand_lift"
+  "smallbox_two_hand_carry"
+  "smallbox_two_hand_drag"
+)
+export CUDA_VISIBLE_DEVICES=0
+for i in "${!categories[@]}"; do
+  nohup python -u src/david/train_lora.py \
+    --david_dataset FullBodyManip \
+    --category ${categories[i]} \
+    --num_steps 10000 \
+    > logs/train_lora_${categories[i]}.out 2>&1 &
+done

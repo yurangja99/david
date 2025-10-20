@@ -219,3 +219,4 @@ smplx_blender_addon/
 !constants/sampled_human_indices.pkl
 imports/mdm/checkpoints/humanml_enc_512_50steps/args.json
 imports/mdm/dataset/HumanML3D
+logs/

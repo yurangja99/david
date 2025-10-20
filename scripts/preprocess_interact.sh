@@ -8,11 +8,12 @@ categories=(
   "smallbox_two_hand_carry"
   "smallbox_two_hand_drag"
 )
-export CUDA_VISIBLE_DEVICES=0
+sudo mkdir logs
 for i in "${!categories[@]}"; do
-  nohup python -u src/david/train_omdm.py \
+  nohup python -u src/david/preprocess_interact.py \
+    --input_dir data/InterAct \
+    --pose_dir results/david/pose_data \
     --dataset FullBodyManip \
     --category ${categories[i]} \
-    --n_epochs 100000 \
-    > logs/train_omdm_${categories[i]}.out 2>&1 &
+    > logs/preprocess_${categories[i]}.out 2>&1 &
 done

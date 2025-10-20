@@ -20,6 +20,7 @@ import open3d as o3d
 from constants.david import SELECTED_INDICES
 from utils.visualize import get_object_vertices, plot_3d_points
 from imports.mdm.data_loaders.humanml.utils import paramUtil
+SKELETON = paramUtil.t2m_kinematic_chain + paramUtil.t2m_left_hand_chain + paramUtil.t2m_right_hand_chain
 
 def inference_omdm():
     cfg = get_config()
@@ -173,7 +174,7 @@ def inference_omdm():
             torch.from_numpy(np.array(R)).to(dtype=torch.float32),
             h=0.15,
         ).detach().cpu().numpy()
-        plot_3d_points(save_pth.replace(".pkl", "_joints.mp4"), paramUtil.t2m_kinematic_chain, global_joints.detach().cpu().numpy(), obj_v, title="Joints", dataset="humanml", fps=20, show_joints=False)
+        plot_3d_points(save_pth.replace(".pkl", "_joints.mp4"), SKELETON, global_joints.detach().cpu().numpy(), obj_v, title="Joints", dataset="humanml", fps=20, show_joints=False)
         plot_3d_points(save_pth.replace(".pkl", "_vertices.mp4"), [], global_vertices[:, ::50], obj_v, title="Vertices(All)", dataset="humanml", fps=20, show_joints=True)
 
 if __name__ == "__main__":

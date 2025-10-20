@@ -34,6 +34,7 @@ from glob import glob
 
 from utils.visualize import plot_3d_points
 from imports.mdm.data_loaders.humanml.utils import paramUtil
+SKELETON = paramUtil.t2m_kinematic_chain + paramUtil.t2m_left_hand_chain + paramUtil.t2m_right_hand_chain
 
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
 comp_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -423,7 +424,7 @@ def process_mdm(
 
         ani_path = os.path.join(mdm_dir, dataset, category, "animation", f"{ii:06d}.mp4")
         os.makedirs(os.path.dirname(ani_path), exist_ok=True)
-        plot_3d_points(ani_path, paramUtil.t2m_kinematic_chain, rec_ric_data.squeeze().numpy(), [], title="Joints", dataset="humanml", fps=30, show_joints=False)
+        plot_3d_points(ani_path, SKELETON, rec_ric_data.squeeze().numpy(), None, [], title="Joints", dataset="humanml", fps=30, show_joints=False)
 
     prepare_mdm_dataset(hmr_dir, pose_dir, new_joints_dir, new_joint_vecs_dir, mdm_dir, dataset, category)
 

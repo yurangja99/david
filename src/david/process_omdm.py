@@ -12,6 +12,7 @@ from constants.david import SELECTED_INDICES
 from tqdm import tqdm
 from utils.visualize import get_object_vertices, plot_3d_points
 from imports.mdm.data_loaders.humanml.utils import paramUtil
+SKELETON = paramUtil.t2m_kinematic_chain + paramUtil.t2m_left_hand_chain + paramUtil.t2m_right_hand_chain
 
 COMPATIBILITY_MATRIX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
 
@@ -98,23 +99,24 @@ def prepare_dataset(
         obj_t_old = obj_t.copy()
         obj_t = obj_t + hand_offset
         
-        video_dir = f"{hoi_data_dir}/{dataset}/{hand_category}/videos/"
+        video_dir = f"{hoi_data_dir}/{dataset}/{hand_category}/animations/"
         os.makedirs(video_dir, exist_ok=True)
         seq_name = os.path.basename(os.path.dirname(obj_pth))
+        object_name = ''.join(ch for ch in category.split("_")[0].lower() if ch.isalnum())
         obj_v = get_object_vertices(
             torch.from_numpy(obj_t).to(dtype=torch.float32), 
             torch.from_numpy(obj_R).to(dtype=torch.float32), 
-            h=0.15,
+            object=object_name
         ).detach().cpu().numpy()
         obj_v_old = get_object_vertices(
             torch.from_numpy(obj_t_old).to(dtype=torch.float32), 
             torch.from_numpy(obj_R).to(dtype=torch.float32), 
-            h=0.15,
+            object=object_name
         ).detach().cpu().numpy()
-        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints_gt.mp4"), paramUtil.t2m_kinematic_chain, joints, obj_v_old[:joints.shape[0]], title="Joints(GT)", dataset="humanml", fps=30, show_joints=False)
-        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints.mp4"), paramUtil.t2m_kinematic_chain, global_joints, obj_v, title="Joints", dataset="humanml", fps=30, show_joints=False)
-        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_all.mp4"), [], global_vertices[:, ::50], obj_v, title="Vertices(All)", dataset="humanml", fps=30, show_joints=True)
-        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_selected.mp4"), [], global_vertices[:, human_sampled_indices], obj_v, title="Vertices(Hands)", dataset="humanml", fps=30, show_joints=True)
+        # plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints_gt.mp4"), SKELETON, joints, object_name, obj_v_old[:joints.shape[0]], title="Joints(GT)", dataset="humanml", fps=30, show_joints=False)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints.mp4"), SKELETON, global_joints, object_name, obj_v, title="Joints", dataset="humanml", fps=30, show_joints=False)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_all.mp4"), [], global_vertices[:, ::50], object_name, obj_v, title="Vertices(All)", dataset="humanml", fps=30, show_joints=True)
+        # plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_selected.mp4"), [], global_vertices[:, human_sampled_indices], object_name, obj_v, title="Vertices(Hands)", dataset="humanml", fps=30, show_joints=True)
 
         for frame_vertices, frame_joints, human_euler, frame_obj_R, frame_obj_t, frame_pose in zip(global_vertices, global_joints, motion_global["poses"][:, :3], obj_R, obj_t, motion_global["poses"][:, 3 : 3 + 21*3]):
             sampled_vertices = frame_vertices[human_sampled_indices]
