@@ -6,11 +6,9 @@ categories=(
   "clothesstand_right_hand"
 )
 tasks=(
-  # "a person is running straight"
-  # "a person is running backwards"
-  # "a person is jumping forward"
-  "a person is doing a high kick"
-  "a person is dancing an energetic cha-cha"
+  "a person is running straight"
+  "a person is running backwards"
+  "a person is jumping forward"
 )
 for i in "${!tasks[@]}"; do
   for j in "${!categories[@]}"; do
@@ -20,7 +18,7 @@ for i in "${!tasks[@]}"; do
       --epoch 0 \
       --task "${tasks[i]}" \
       --human_motion_dir results/inference_251105/human_motion \
-      --device 0
+      --device 1
     echo "[Done] task '${tasks[i]}', category '${categories[j]}'"
   done
 done

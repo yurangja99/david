@@ -19,11 +19,11 @@ def train_lora(
     t_args,
     david_dataset,
     category,
-    checkpont_save_dir,
+    checkpoint_save_dir,
     skip_done
 ):
     t_args.is_train = True
-    t_args.save_dir = f"{checkpont_save_dir}/{david_dataset}/{category}"
+    t_args.save_dir = f"{checkpoint_save_dir}/{david_dataset}/{category}"
     
     fixseed(args.seed)
     train_platform_type = eval(t_args.train_platform_type)
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     group = parser.add_argument_group('david')
     group.add_argument("--david_dataset", type=str, default="FullbodyManip")
     group.add_argument("--category", type=str, default="largetable")
-    group.add_argument("--checkpont_save_dir", type=str, default="results/david/lora")
+    group.add_argument("--checkpoint_save_dir", type=str, default="results/david/lora")
     group.add_argument("--skip_done", action="store_true")
 
     args = parser.parse_args()
@@ -82,6 +82,6 @@ if __name__ == "__main__":
         t_args=args,
         david_dataset=args.david_dataset,
         category=args.category,
-        checkpont_save_dir=args.checkpont_save_dir,
+        checkpoint_save_dir=args.checkpoint_save_dir,
         skip_done=args.skip_done
     )

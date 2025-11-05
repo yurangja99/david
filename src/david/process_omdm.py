@@ -37,19 +37,20 @@ def prepare_dataset(
 
     
     if hand_info == 1:
-        hand_category = f"left_{category}"
+        hand_verts_file = "constants/hand_left_verts.pkl"
     elif hand_info == 2:
-        hand_category = f"right_{category}"
+        hand_verts_file = "constants/hand_right_verts.pkl"
     elif hand_info == 0:
-        hand_category = f"{category}"
+        hand_verts_file = "constants/hand_verts.pkl"
 
-    with open("constants/sampled_human_indices.pkl", "rb") as handle:
+    with open(hand_verts_file, "rb") as handle:
         human_sampled_indices = pickle.load(handle)
 
     joint_pths = sorted(glob(f"{joint_dir}/{dataset}/{category}/*/*/*.npy"))
     obj_pths = sorted(glob(f"{obj_dir}/{dataset}/{category}/*/*/*.npz"))
     assert len(joint_pths) == len(obj_pths)
 
+    lengths = []
     pts = []
     RT = []
     body_poses = []
@@ -99,7 +100,7 @@ def prepare_dataset(
         obj_t_old = obj_t.copy()
         obj_t = obj_t + hand_offset
         
-        video_dir = f"{hoi_data_dir}/{dataset}/{hand_category}/animations/"
+        video_dir = f"{hoi_data_dir}/{dataset}/{category}/animations/"
         os.makedirs(video_dir, exist_ok=True)
         seq_name = os.path.basename(os.path.dirname(obj_pth))
         object_name = ''.join(ch for ch in category.split("_")[0].lower() if ch.isalnum())
@@ -113,10 +114,10 @@ def prepare_dataset(
             torch.from_numpy(obj_R).to(dtype=torch.float32), 
             object=object_name
         ).detach().cpu().numpy()
-        # plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints_gt.mp4"), SKELETON, joints, object_name, obj_v_old[:joints.shape[0]], title="Joints(GT)", dataset="humanml", fps=30, show_joints=False)
-        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints.mp4"), SKELETON, global_joints, object_name, obj_v, title="Joints", dataset="humanml", fps=30, show_joints=False)
-        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_all.mp4"), [], global_vertices[:, ::50], object_name, obj_v, title="Vertices(All)", dataset="humanml", fps=30, show_joints=True)
-        # plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_selected.mp4"), [], global_vertices[:, human_sampled_indices], object_name, obj_v, title="Vertices(Hands)", dataset="humanml", fps=30, show_joints=True)
+        # plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints_gt.mp4"), SKELETON, joints, object_name, obj_v_old[:joints.shape[0]], title="Joints(GT)", dataset="humanml", fps=20, show_joints=False)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_joints.mp4"), SKELETON, global_joints, object_name, obj_v, title="Joints", dataset="humanml", fps=20, show_joints=False)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_all.mp4"), [], global_vertices[:, ::50], object_name, obj_v, title="Vertices(All)", dataset="humanml", fps=20, show_joints=True)
+        plot_3d_points(os.path.join(video_dir, f"{seq_name}_vertices_selected.mp4"), [], global_vertices[:, human_sampled_indices], object_name, obj_v, title="Vertices(Hands)", dataset="humanml", fps=20, show_joints=True)
 
         for frame_vertices, frame_joints, human_euler, frame_obj_R, frame_obj_t, frame_pose in zip(global_vertices, global_joints, motion_global["poses"][:, :3], obj_R, obj_t, motion_global["poses"][:, 3 : 3 + 21*3]):
             sampled_vertices = frame_vertices[human_sampled_indices]
@@ -138,17 +139,21 @@ def prepare_dataset(
             RT.append(compatible_frame_obj_Rt)
             body_poses.append(frame_pose.reshape((21, 3)))
     
+        lengths.append(frame_num)
+    
+    lengths = np.array(lengths, dtype=np.longlong)
     pts = np.array(pts) # N x 1024 x 3
     RT = np.array(RT) # N x 3 x 4
     body_poses = np.array(body_poses) # N x 63 x 3
 
     to_save = dict(
+        lengths=lengths,
         points=pts,
         transform=RT,
         poses=body_poses,
     )
     
-    save_pth = f"{hoi_data_dir}/{dataset}/{hand_category}/RT.pkl"
+    save_pth = f"{hoi_data_dir}/{dataset}/{category}/RT.pkl"
     os.makedirs("/".join(save_pth.split("/")[:-1]), exist_ok=True)
 
     with open(save_pth, 'wb') as handle:

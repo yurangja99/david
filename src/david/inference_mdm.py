@@ -97,6 +97,40 @@ def main(args):
                             arg, one_action, one_action_text in zip(collate_args, action, action_text)]
         _, model_kwargs = collate(collate_args)
 
+    # reference motion and blending frame: added by yurangja99
+    if args.ref_bf > 0:
+        reference_motion = np.load(args.ref_path)   # [263, T]
+        reference_motion = (reference_motion - data.dataset.t2m_dataset.mean) / data.dataset.t2m_dataset.std
+        reference_motion = torch.from_numpy(reference_motion.T).float().to(args.device).unsqueeze(0).unsqueeze(2)
+        
+        # construct inpainting mask and inpainted motion
+        inpainting_mask = torch.zeros((args.batch_size, model.njoints, model.nfeats, max_frames), dtype=torch.bool).to(args.device)
+        inpainted_motion = torch.zeros((args.batch_size, model.njoints, model.nfeats, max_frames), dtype=torch.float32).to(args.device)
+        inpainting_mask[..., :args.ref_bf] = True
+        if args.hand_info == 0:
+            inpainting_mask[:, 67+12*6:67+13*6] = True
+            inpainting_mask[:, 67+15*6:67+16*6] = True
+            inpainting_mask[:, 67+17*6:67+18*6] = True
+            inpainting_mask[:, 67+19*6:67+20*6] = True
+            inpainting_mask[:, 67+13*6:67+14*6] = True
+            inpainting_mask[:, 67+16*6:67+17*6] = True
+            inpainting_mask[:, 67+18*6:67+19*6] = True
+            inpainting_mask[:, 67+20*6:67+21*6] = True
+        elif args.hand_info == 1:
+            inpainting_mask[:, 67+12*6:67+13*6] = True
+            inpainting_mask[:, 67+15*6:67+16*6] = True
+            inpainting_mask[:, 67+17*6:67+18*6] = True
+            inpainting_mask[:, 67+19*6:67+20*6] = True
+        elif args.hand_info == 2:
+            inpainting_mask[:, 67+13*6:67+14*6] = True
+            inpainting_mask[:, 67+16*6:67+17*6] = True
+            inpainting_mask[:, 67+18*6:67+19*6] = True
+            inpainting_mask[:, 67+20*6:67+21*6] = True
+        inpainted_motion[..., :args.ref_bf] = reference_motion[..., :args.ref_bf]
+        inpainted_motion[..., args.ref_bf:] = reference_motion[..., args.ref_bf-1:args.ref_bf]
+        model_kwargs['y']['inpainting_mask'] = inpainting_mask
+        model_kwargs['y']['inpainted_motion'] = inpainted_motion
+
     all_motions = []
     all_lengths = []
     all_text = []
@@ -107,6 +141,72 @@ def main(args):
         # add CFG scale to batch
         if args.guidance_param != 1:
             model_kwargs['y']['scale'] = torch.ones(args.batch_size, device=dist_util.dev()) * args.guidance_param
+
+        # added by yurangja99
+        # cond_fn: distance between two hands
+        def calc_hand_dist(x):
+            mean = torch.from_numpy(data.dataset.t2m_dataset.mean).to(dtype=x.dtype, device=x.device)
+            std = torch.from_numpy(data.dataset.t2m_dataset.std).to(dtype=x.dtype, device=x.device)
+            unnorm_x = x.permute(0, 2, 3, 1) * std + mean
+            positions = unnorm_x[..., 4:(22 - 1) * 3 + 4]
+            positions = positions.reshape(*positions.shape[:-1], -1, 3) # [1, 1, 196, 21, 3]
+            hand_dist = torch.norm(positions[..., 20-1, :] - positions[..., 21-1, :], dim=-1)
+            return hand_dist
+        
+        def calc_upper_pose(x):
+            mean = torch.from_numpy(data.dataset.t2m_dataset.mean).to(dtype=x.dtype, device=x.device)
+            std = torch.from_numpy(data.dataset.t2m_dataset.std).to(dtype=x.dtype, device=x.device)
+            unnorm_x = x.permute(0, 2, 3, 1) * std + mean
+            pose = unnorm_x[..., 67:67 + (22-1) * 6]
+            pose = pose.reshape(*pose.shape[:-1], -1, 6)    # [1, 1, 196, 21, 6]
+            return pose[..., [12, 15, 17, 19], :], pose[..., [13, 16, 18, 20], :]   # left, right
+        
+        def calc_body_pos(x):
+            mean = torch.from_numpy(data.dataset.t2m_dataset.mean).to(dtype=x.dtype, device=x.device)
+            std = torch.from_numpy(data.dataset.t2m_dataset.std).to(dtype=x.dtype, device=x.device)
+            unnorm_x = x.permute(0, 2, 3, 1) * std + mean
+            positions = unnorm_x[..., 4:(22 - 1) * 3 + 4]
+            positions = positions.reshape(*positions.shape[:-1], -1, 3) # [1, 1, 196, 21, 3]
+            return positions
+
+        def cond_fn(x, scaled_t, **kwargs):
+            guidance_intense = 500
+            
+            with torch.enable_grad():
+                x_clone = x.clone().detach().requires_grad_(True)
+
+                # distance between two hands    
+                if args.hand_info == 0:
+                    hand_dist = calc_hand_dist(x_clone)
+                    ref_hand_dist = calc_hand_dist(inpainted_motion)
+                    hand_loss = torch.nn.functional.mse_loss(hand_dist, ref_hand_dist)
+                else:
+                    hand_loss = torch.zeros(())
+
+                # upper body pose
+                left_pose, right_pose = calc_upper_pose(x_clone)
+                ref_left_pose, ref_right_pose = calc_upper_pose(inpainted_motion)
+                if args.hand_info == 0:
+                    pose_loss = torch.nn.functional.mse_loss(left_pose, ref_left_pose) + torch.nn.functional.mse_loss(right_pose, ref_right_pose)
+                elif args.hand_info == 1:
+                    pose_loss = torch.nn.functional.mse_loss(left_pose, ref_left_pose)
+                else:
+                    pose_loss = torch.nn.functional.mse_loss(right_pose, ref_right_pose)\
+                
+                # body pos
+                body_pos = calc_body_pos(x_clone)
+                ref_body_pos = calc_body_pos(inpainted_motion)
+                pos_loss = torch.nn.functional.mse_loss(
+                    body_pos[:, :, args.ref_bf:args.ref_bf+args.ref_sf],
+                    ref_body_pos[:, :, args.ref_bf-1:args.ref_bf],
+                )
+
+                loss = guidance_intense * (hand_loss + pose_loss + pos_loss)
+                print(hand_loss.item(), pose_loss.item(), pos_loss.item())
+                grad = torch.autograd.grad(-loss, x_clone)[0]
+                x_clone.requires_grad_(False)
+
+            return grad
 
         sample_fn = diffusion.p_sample_loop
 
@@ -122,7 +222,13 @@ def main(args):
             dump_steps=None,
             noise=None,
             const_noise=False,
+            cond_fn=cond_fn,
         )
+
+        # inpainting smoothing
+        if args.ref_bf > 0:
+            w = torch.arange(1/args.ref_sf, 1+1/args.ref_sf, 1/args.ref_sf).unsqueeze(0).unsqueeze(0).unsqueeze(0).to(args.device)
+            sample[..., args.ref_bf:args.ref_bf+args.ref_sf] = w * sample[..., args.ref_bf:args.ref_bf+args.ref_sf] + (1 - w) * reference_motion[..., args.ref_bf:args.ref_bf+args.ref_sf]
 
         # Recover XYZ *positions* from HumanML3D vector representation
         if model.data_rep == 'hml_vec':
@@ -274,11 +380,19 @@ if __name__ == "__main__":
     group.add_argument("--human_motion_dir", type=str, default="results/inference/human_motion")
     group.add_argument("--lora_weight", type=float, default=0.9)
     group.add_argument("--skip_done", action="store_true")
+    group.add_argument("--ref_dir", type=str, default="results/david_ref/mdm")
+    group.add_argument("--ref_idx", type=int, default=0)
+    group.add_argument("--ref_bf", type=int, default=0, help="reference blending frame")
+    group.add_argument("--ref_sf", type=int, default=0, help="reference smoothing frame")
+    parser.add_argument("--hand_info", type=int, default=0)
 
     args = parser.parse_args()
     args.is_train = False
     args.model_path = f"{args.lora_dir}/{args.david_dataset}/{args.category}/model{750000 + args.inference_epoch:09d}.pt"
     args.output_dir = f"{args.human_motion_dir}/{args.david_dataset}/{args.category}/human{args.inference_epoch:09d}/{args.text_prompt.replace(', ', ',').replace(' ', '_')}/seed{args.seed:05d}"
+    if args.ref_bf > 0:
+        args.ref_path = f"{args.ref_dir}/{args.david_dataset}/{args.category}/new_joint_vecs/{args.ref_idx:06d}.npy"
+        print(f"Reference motion: {args.ref_path}")
 
     if args.skip_done and os.path.exists(args.output_dir): pass
     else: main(args)

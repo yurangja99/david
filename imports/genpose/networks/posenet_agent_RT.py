@@ -380,12 +380,16 @@ class PoseNet(nn.Module):
             object_vertices,
             ratio,
             object_scale,
-            contact_threshold
+            contact_threshold,  # added by yurangja99
+            ref,                # added by yurangja99
+            ref_frame,          # added by yurangja99
         ):
         self.is_testing = True
         self.net.eval()
         with torch.no_grad():
             data = dict(thetas=thetas)
+            data['ref'] = ref               # added by yurangja99
+            data['ref_frame'] = ref_frame   # added by yurangja99
             # data['pts_feat'] = self.net(data, mode='pts_feature')
             data['theta_feat'] = self.net(data, mode='theta')
             data["gt_pose"] = torch.zeros((batch_size))

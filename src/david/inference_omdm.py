@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import sys
 import trimesh
+import pytorch3d
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from imports.genpose.configs.config import get_config
@@ -30,26 +31,44 @@ def inference_omdm():
     dataset = cfg.dataset
     cfg.sampler_mode = ['ode_inference'] # override
 
-    object_path = category2object(dataset, category)
+    object_path = category2object(dataset, category.split("_")[0])
 
     obj_mesh = trimesh.load(object_path, force='mesh')
     obj_vertices = np.array(obj_mesh.vertices).reshape((-1, 3))
+
+    if cfg.ref_bf > 0:
+        cfg.ref_hoi_path = f"{cfg.ref_hoi_dir}/{dataset}/{category}/RT.pkl"
+        ref = np.load(cfg.ref_hoi_path, allow_pickle=True)
+        ref_lengths = ref["lengths"].tolist()
+        ref_start_idx = sum(ref_lengths[:cfg.ref_hoi_idx])
+        ref_rt = torch.from_numpy(ref["transform"]).float().to(cfg.device)
+        ref_rt = ref_rt[ref_start_idx:]  # [T, 3, 4]
+        ref_trans = ref_rt[..., 3]   # [T, 3]
+        ref_rot_mat = ref_rt[..., :3]    # [T, 3, 3]
+        
+        ref_6d = pytorch3d.transforms.matrix_to_rotation_6d(ref_rot_mat.permute(0, 2, 1))    # [T, 6]
+        reference = torch.cat([ref_6d, ref_trans], dim=-1)
     
     # with open(sorted(glob(f"rebuttal/fullbodymanip/train_data/{category}/*/object/*.pkl"))[0], "rb") as handle:
     #     object_data = pickle.load(handle)
     # average_scale = float(object_data["obj_scale"][0])
     average_scale = 1.0 # 0.025866943666666666
-
     print(f"average scale: {average_scale}")
-    with open("constants/sampled_human_indices.pkl", "rb") as handle:
+
+    if cfg.hand_info == 1:
+        hand_verts_file = "constants/hand_left_verts.pkl"
+    elif cfg.hand_info == 2:
+        hand_verts_file = "constants/hand_right_verts.pkl"
+    elif cfg.hand_info == 0:
+        hand_verts_file = "constants/hand_verts.pkl"
+
+    with open(hand_verts_file, "rb") as handle:
         human_sampled_indices = pickle.load(handle)
 
     motion_pths = sorted(glob(f"{cfg.inference_human_motion_dir}/{dataset}/{category}/*/*/*/*.npz"))
     print('\n'.join(motion_pths))
     for ii, motion_pth in enumerate(motion_pths[:]):
         save_pth = motion_pth.replace(cfg.inference_human_motion_dir, cfg.inference_object_motion_dir).replace(".npz", ".pkl")
-        save_pth_tokens = save_pth.split(os.sep)
-        save_pth = os.path.join(*save_pth_tokens[-3], f"obj{cfg.inference_epoch}", *save_pth_tokens[-3:])
 
         if cfg.skip_done and os.path.exists(save_pth): continue
         save_dir = "/".join(save_pth.split("/")[:-1])
@@ -102,7 +121,7 @@ def inference_omdm():
         height = t_pose_vertices[0, :, 1].max() - t_pose_vertices[0, :, 1].min() # N x 3
         ratio = 1.0
 
-        print(ratio)    # 1.7213199734687805
+        print(ratio)    # 1.7213199734687805 -> 1.0
 
         R = []
         t = []
@@ -145,6 +164,8 @@ def inference_omdm():
             ratio=ratio,
             object_scale=average_scale,
             contact_threshold=cfg.inference_contact_threshold, 
+            ref=reference,
+            ref_frame=cfg.ref_bf,
         )
 
         for i, sampler_mode in enumerate(sampler_mode_list):
@@ -172,10 +193,10 @@ def inference_omdm():
         obj_v = get_object_vertices(
             torch.from_numpy(np.array(t)[..., 0]).to(dtype=torch.float32),
             torch.from_numpy(np.array(R)).to(dtype=torch.float32),
-            h=0.15,
+            object=category.split("_")[0]
         ).detach().cpu().numpy()
-        plot_3d_points(save_pth.replace(".pkl", "_joints.mp4"), SKELETON, global_joints.detach().cpu().numpy(), obj_v, title="Joints", dataset="humanml", fps=20, show_joints=False)
-        plot_3d_points(save_pth.replace(".pkl", "_vertices.mp4"), [], global_vertices[:, ::50], obj_v, title="Vertices(All)", dataset="humanml", fps=20, show_joints=True)
+        plot_3d_points(save_pth.replace(".pkl", "_joints.mp4"), SKELETON, global_joints.detach().cpu().numpy(), category.split("_")[0], obj_v, title="Joints", dataset="humanml", fps=20, show_joints=False)
+        plot_3d_points(save_pth.replace(".pkl", "_vertices.mp4"), [], global_vertices[:, ::50], category.split("_")[0], obj_v, title="Vertices(All)", dataset="humanml", fps=20, show_joints=True)
 
 if __name__ == "__main__":
     inference_omdm()

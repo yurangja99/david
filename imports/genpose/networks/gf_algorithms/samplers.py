@@ -445,6 +445,10 @@ def cond_ode_sampler_for_RT_inference(
     contact_threshold=data['contact_threshold']
     init_x = prior((batch_size, pose_dim), T=T).to(device) if init_x is None else init_x + prior((batch_size, pose_dim), T=T).to(device)
     shape = init_x.shape
+
+    # reference: added by yurangja99
+    ref = data['ref']
+    ref_frame = data['ref_frame']
     
     def smoothness_loss(x):
         position_smoothness_loss = torch.nn.functional.mse_loss(x[1:, :], x[:-1, :])
@@ -688,9 +692,14 @@ def cond_ode_sampler_for_RT_inference(
         # return drift - 0.5 * (diffusion**2) * score.cpu().numpy().reshape((-1,)) - sm_grad.cpu().numpy().reshape((-1,))
         # return drift - 0.5 * (diffusion**2) * score.cpu().numpy().reshape((-1,))
 
+    # guidance for reference: added by yurangja99
+    def reference_loss(x):
+        return 500 * torch.nn.functional.mse_loss(x[:ref_frame], ref[:ref_frame])
+
     def ode_func_torch(t, x):
         # x: shape (batch_size * pose_dim,)
         x = x.reshape(-1, pose_dim).to(device)
+        x[:ref_frame] = ref[:ref_frame] # inpainting: added by yurangja99
         # time_steps = torch.ones(batch_size, 1, device=device) * t
     
         drift, diffusion = sde_coeff(t.expand(x.shape))
@@ -717,6 +726,9 @@ def cond_ode_sampler_for_RT_inference(
             else:
                 ct_grad = torch.zeros_like(sm_grad, device=device)
 
+            # reference loss: added by yurangja99
+            ref_loss = reference_loss(x_clone)
+            ref_grad = torch.autograd.grad(-ref_loss, x_clone)[0]
             # print(f"drift: {drift.shape}")
             # print(f"diffusion: {diffusion.shape}")
             # print(f"score: {score.shape}")
@@ -724,7 +736,8 @@ def cond_ode_sampler_for_RT_inference(
             # print(f"ct_grad: {ct_grad.shape}")
             x_clone.requires_grad_(False)
 
-        total_drift = drift - 0.5 * diffusion ** 2 * score - sm_grad - ct_grad
+        # reference loss added: added by yurangja99
+        total_drift = drift - 0.5 * diffusion ** 2 * score - sm_grad - ct_grad - ref_grad
         return total_drift.reshape(-1)
     
     # Run the black-box ODE solver, note the 

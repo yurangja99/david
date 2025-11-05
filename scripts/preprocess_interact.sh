@@ -1,19 +1,22 @@
 categories=(
+  "largetable_carry"
+  "largetable_lift"
+  "smallbox"
   "clothesstand_left_hand"
   "clothesstand_right_hand"
-  "clothesstand_two_hand"
-  "largetable_two_hand_carry"
-  "largetable_two_hand_drag"
-  "largetable_two_hand_lift"
-  "smallbox_two_hand_carry"
-  "smallbox_two_hand_drag"
+  "clothesstand_two_hands"
 )
+crop_start=( 30 45 30 15 15 20 )
+crop_end=( 35 50 35 15 15 20 )
 sudo mkdir logs
 for i in "${!categories[@]}"; do
-  nohup python -u src/david/preprocess_interact.py \
-    --input_dir data/InterAct \
-    --pose_dir results/david/pose_data \
+  python src/david/preprocess_interact.py \
+    --input_dir data/OMOMO_retarget_new_subsets \
+    --pose_dir results/david_retarget/pose_data \
+    --obj_dir results/david_retarget/obj_data \
     --dataset FullBodyManip \
     --category ${categories[i]} \
-    > logs/preprocess_${categories[i]}.out 2>&1 &
+    --crop_start ${crop_start[i]} \
+    --crop_end ${crop_end[i]} \
+    --device 1
 done

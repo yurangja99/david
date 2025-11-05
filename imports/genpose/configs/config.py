@@ -88,6 +88,11 @@ def get_config():
     parser.add_argument('--max_eval_num', type=int, default=10000000)
     parser.add_argument('--results_path', type=str, default='')
     parser.add_argument('--T0', type=float, default=1.0)
+    # added by yurangja99
+    parser.add_argument("--ref_hoi_dir", type=str, default="results/david_retarget/hoi_data")
+    parser.add_argument("--ref_hoi_idx", type=int, default=0)
+    parser.add_argument("--ref_hoi_blending_frame", type=int, default=0)
+    parser.add_argument("--hand_info", type=int, default=0)
     
     
     """ nocs_mrcnn testing"""

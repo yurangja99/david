@@ -101,6 +101,7 @@ def plot_3d_points(save_path, kinematic_tree, joints, object_name, obj_points, t
     MAXS = data.max(axis=0).max(axis=0)
     colors_blue = ["#4D84AA", "#5B9965", "#61CEB9", "#34C1E2", "#80B79A"]  # GT color
     colors_orange = ["#DD5A37", "#D69E00", "#B75A39", "#FF6D00", "#DDB50E"]  # Generation color
+    colors_all = ["#4D84AA", "#DD5A37", "#5B9965", "#D69E00", "#61CEB9", "#B75A39", "#34C1E2", "#FF6D00", "#80B79A", "#DDB50E"]
     colors = colors_orange
     
     frame_number = data.shape[0]
@@ -145,14 +146,14 @@ def plot_3d_points(save_path, kinematic_tree, joints, object_name, obj_points, t
             )
         if obj_data is not None:
             ax.scatter(obj_data[index, :, 0], obj_data[index, :, 1], obj_data[index, :, 2], color=colors_blue[0], s=3, alpha=0.2)
-            for pair in OBJECT_KINEMATICS[object_name]:
+            for idx, pair in enumerate(OBJECT_KINEMATICS[object_name]):
                 linewidth = 2.0
                 ax.plot3D(
                     obj_data[index, pair, 0],
                     obj_data[index, pair, 1],
                     obj_data[index, pair, 2],
                     linewidth=linewidth,
-                    color=colors_blue[0],
+                    color=colors_all[idx % len(colors_all)],
                 )
 
     ani = FuncAnimation(fig, update, frames=frame_number, interval=1000 / fps, repeat=False)

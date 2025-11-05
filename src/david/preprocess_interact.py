@@ -29,7 +29,7 @@ def extract_category_from_seq_name(seq_name: str) -> str:
         cat = seq_name
     return cat
 
-def jpos22_from_motion(motion: np.ndarray, keep_idx_csv: str | None) -> np.ndarray:
+def jpos22_from_motion(motion: np.ndarray) -> np.ndarray:
     """
     motion: (T, 24*3 + 24*3 + 22*6)
     -> jpos24: (T,24,3) -> jpos22: (T,22,3)
@@ -37,21 +37,7 @@ def jpos22_from_motion(motion: np.ndarray, keep_idx_csv: str | None) -> np.ndarr
     T = motion.shape[0]
     assert motion.shape[1] >= 24*3, f"motion feature dim too small: {motion.shape}"
     jpos24 = motion[:, :24*3].reshape(T, 24, 3)
-
-    if keep_idx_csv:
-        keep_idx = [int(x) for x in keep_idx_csv.split(',')]
-        assert len(keep_idx) == 22, f"keep_idx must have 22 ints, got {len(keep_idx)}"
-    else:
-        # 기본: 앞 22개 사용 (필요시 --keep_idx로 정확 매핑 지정)
-        keep_idx = list(range(22))
-
-    return jpos24[:, keep_idx, :].astype(np.float32)
-
-def decide_split_from_path(path: str, default: str = "train") -> str:
-    name = path.lower()
-    if "train" in name: return "train"
-    if "test" in name or "val" in name: return "test"
-    return default
+    return jpos24[:, :22, :].astype(np.float32)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -60,12 +46,13 @@ def main():
     ap.add_argument("--obj_dir", default="results/david/obj_data")
     ap.add_argument("--dataset", default="FullBodyManip")
     ap.add_argument("--category", default="largetable")
-    ap.add_argument("--keep_idx", default="", help="24→22 인덱스 CSV (예: '0,1,2,...,21'). 비우면 앞 22개")
     ap.add_argument("--min_len", type=int, default=1, help="최소 프레임 수 미만은 스킵")
+    ap.add_argument("--crop_start", type=int, default=0, help="HOI 시작 부분 자를 프레임 수")
+    ap.add_argument("--crop_end", type=int, default=0, help="HOI 마지막 부분 자를 프레임 수")
+    ap.add_argument("--device", type=int, default=0)
     args = ap.parse_args()
 
     COMPATIBILITY_MATRIX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
-    ROT_OFS = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
 
     target_cat_norm = normalize(args.category)
     total_saved = 0
@@ -75,7 +62,7 @@ def main():
         data = torch.load(os.path.join(args.input_dir, args.category, p))
 
         seq_name = p.replace(".pt", "")
-        split = "eval" if "sub16" in seq_name or "sub17" in seq_name else "train"
+        split = "train"
         total_seen += 1
 
         cat = extract_category_from_seq_name(seq_name)
@@ -99,16 +86,26 @@ def main():
         # crop non-interactive frames
         contact_mask = data[:, 330] > 0.5
         contact_idx = torch.nonzero(contact_mask.flatten(), as_tuple=True)[0]
-        t1 = int(contact_idx[0]) if contact_idx.shape[0] > 0 else None
-        t2 = int(contact_idx[-1]) if contact_idx.shape[0] > 0 else None
+        t1 = int(contact_idx[0]) + args.crop_start if contact_idx.shape[0] > 0 else None
+        t2 = int(contact_idx[-1]) - args.crop_end if contact_idx.shape[0] > 0 else None
         if t1 is None or t2 - t1 < 10:
             print(f"[skip] {seq_name}: t1={t1}, t2={t2}")
             continue
         else:
             print(f"[info] {seq_name}: t1={t1}, t2={t2}")
         
+        data = data[t1:t2]
+        
+        # interpolate: 30FPS -> 20FPS
+        data = torch.nn.functional.interpolate(
+            data.transpose(0, 1).unsqueeze(0),  # [1, 591, T]
+            size=int(round(data.shape[0] * 20 / 30)),
+            mode="linear",
+            align_corners=True,
+        ).squeeze(0).transpose(0, 1)
+
         # get and save joint pos
-        jpos52 = data[t1:t2, 162:162+52*3].reshape(t2-t1, 52, 3).detach().cpu().numpy().astype(np.float32)
+        jpos52 = data[:, 162:162+52*3].reshape(-1, 52, 3).detach().cpu().numpy().astype(np.float32)
         jpos22 = jpos52[:, [0, 1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12, 14, 33, 13, 15, 34, 16, 35, 17, 36], :]
         jpos22 = COMPATIBILITY_MATRIX @ jpos22[..., None]
         jpos22 = jpos22[..., 0]
@@ -127,13 +124,13 @@ def main():
         }
         npy_path = out_dir / "000000_mdm.npy"
         np.save(npy_path.as_posix(), npy_data)
-        smplify = vis_utils.npy2obj(npy_path.as_posix(), 0, 0, device=0, cuda=True)
+        smplify = vis_utils.npy2obj(npy_path.as_posix(), 0, 0, device=args.device, cuda=True)
         smplify_data = smplify.get_npy()
         os.remove(npy_path)
 
         # get and save obj
-        obj_trans = data[t1:t2, 318:321].detach().cpu().numpy()
-        obj_quat = data[t1:t2, [324, 321, 322, 323]]    # wxyz type
+        obj_trans = data[:, 318:321].detach().cpu().numpy()
+        obj_quat = data[:, [324, 321, 322, 323]]    # wxyz type
         obj_rot = quaternion_to_matrix(obj_quat).detach().cpu().numpy()
         
         obj_trans = COMPATIBILITY_MATRIX @ obj_trans[..., None]
@@ -166,7 +163,7 @@ def main():
             SKELETON, jpos22, 
             target_cat_norm, obj_vertices, 
             title="Joints and Object", 
-            dataset="humanml", fps=30, show_joints=False
+            dataset="humanml", fps=20, show_joints=False
         )
 
         total_saved += 1

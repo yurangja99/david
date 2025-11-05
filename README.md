@@ -1,5 +1,9 @@
 # <p align="center"> DAViD: Modeling Dynamic Affordance of 3D Objects Using Pre-trained Video Diffusion Models (ICCV 2025)</p>
 
+## 최종 수정
+- LoRA epoch 0과 인페인팅 활용하여 휴먼 모션 생성
+- postprocess로 바로 object trajectory 생성
+
 ## [Project Page](https://snuvclab.github.io/david/) &nbsp;|&nbsp; [Paper](https://arxiv.org/pdf/2501.08333) 
 
 ![demo.png](./assets/teaser.png)
@@ -135,6 +139,15 @@ blenderproc debug src/visualization/visualize_4d_hoi_sample.py --dataset "ComAss
 ```
 
 ![4dhoi.gif](./assets/4dhoi.gif)
+
+
+### Preprocess FullBodyManip Reference Dataset (Optional)
+
+Refer to [scripts/get_reference_motion.sh](./scripts/get_reference_motion.sh)
+
+```shell
+bash scripts/get_reference_motion.sh
+```
 
 ### Preprocess FullBodyManip Dataset
 

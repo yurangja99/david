@@ -1,41 +1,56 @@
 categories=(
+  "largetable_carry"
+  "largetable_lift"
+  "smallbox"
   "clothesstand_left_hand"
   "clothesstand_right_hand"
-  "clothesstand_two_hand"
-  "largetable_two_hand_carry"
-  "largetable_two_hand_drag"
-  "largetable_two_hand_lift"
-  "smallbox_two_hand_carry"
-  "smallbox_two_hand_drag"
 )
+# objects=(
+#   "a table"
+#   "a table"
+#   "a small box"
+#   "a long object"
+#   "a long object"
+# )
+ref_idx=(0 0 0 0 0)
+blending_frame=(10 10 10 10 10)
+smoothing_frame=(5 5 5 5 5 5)
+hand_info=(0 0 0 1 2)
 tasks=(
-  "A person runs fast forward"
-  "A person jumps forward"
-  "A person high kicks"
-  "A person side steps fast"
+  "a person is running straight"
+  "a person is running backwards"
+  "a person is jumping forward"
+  "a person is doing a high kick"
+  "a person is dancing an energetic cha-cha"
 )
-export CUDA_VISIBLE_DEVICES=1
-for epoch in 1000 2000 4000 6000 8000; do
-  for i in "${!tasks[@]}"; do
-    for j in "${!categories[@]}"; do
-      prompt="${tasks[i]}, ${categories[j]}"
-      pids=()
-      for seed in $(seq 0 9); do
-        nohup python src/david/inference_mdm.py \
-          --david_dataset FullBodyManip \
-          --category ${categories[j]} \
-          --text_prompt "$prompt" \
-          --seed $seed \
-          --num_samples 1 \
-          --num_repetitions 1 \
-          --lora_weight 0.9 \
-          --inference_epoch $epoch \
-          > logs/inference_mdm_${seed}.out 2>&1 &
-        pids+=($!)
-      done
-      for pid in "${pids[@]}"; do
-        wait $pid
-      done
+for i in "${!tasks[@]}"; do
+  for j in "${!categories[@]}"; do
+    prompt="${tasks[i]}" # while carrying an object"
+    pids=()
+    for seed in $(seq 0 9); do
+      nohup python -u src/david/inference_mdm.py \
+        --david_dataset FullBodyManip \
+        --category ${categories[j]} \
+        --lora_dir results/david_retarget_251028/lora \
+        --human_motion_dir results/inference_251105/human_motion \
+        --text_prompt "$prompt" \
+        --seed $seed \
+        --num_samples 1 \
+        --num_repetitions 1 \
+        --lora_weight 0.0 \
+        --inference_epoch 0 \
+        --ref_dir results/david_retarget_251028/mdm \
+        --ref_idx ${ref_idx[j]} \
+        --ref_bf ${blending_frame[j]} \
+        --ref_sf ${smoothing_frame[j]} \
+        --hand_info ${hand_info[j]} \
+        --device 0 \
+        >> logs/inference_mdm_${seed}.out 2>&1 &
+      pids+=($!)
     done
+    for pid in "${pids[@]}"; do
+      wait $pid
+    done
+    echo "[Done] task '${tasks[i]}', category '${categories[j]}'"
   done
 done

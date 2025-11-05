@@ -95,6 +95,10 @@ print(f"#right hand verts: {right_hand_verts}")
 print(f"#left hand verts: {len(left_hand_verts)}")
 print(f"#right hand verts: {len(right_hand_verts)}")
 
+with open("hand_left_verts.pkl", "wb") as f:
+  pickle.dump(left_hand_verts.tolist(), f)
+with open("hand_right_verts.pkl", "wb") as f:
+  pickle.dump(right_hand_verts.tolist(), f)
 with open("hand_verts.pkl", "wb") as f:
   pickle.dump(left_hand_verts.tolist()+right_hand_verts.tolist(), f)
 # np.save("smplx_left_hand_verts.npy", left_hand_verts)

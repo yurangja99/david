@@ -305,7 +305,7 @@ def prepare_mdm_dataset(hmr_dir, pose_dir, new_joints_dir, new_joint_vecs_dir, m
     all_file_names = []
     for ii, (joint_pth, new_joint_pth, new_joint_vec_pth) in enumerate(zip(joints_pths, new_joint_pths, new_joint_vecs_pths)):
         
-        CATEGORY2TEXT_LIST[category] = [category]
+        CATEGORY2TEXT_LIST[category] = [category.split("_")[0]]
 
         if SELECTED_INDICES.get(dataset, None) is not None and SELECTED_INDICES[dataset].get(category) is not None and ii not in SELECTED_INDICES[dataset][category]: continue
         left_indices = SELECTED_INDICES.get(f"left_{category}", None)
@@ -424,7 +424,7 @@ def process_mdm(
 
         ani_path = os.path.join(mdm_dir, dataset, category, "animation", f"{ii:06d}.mp4")
         os.makedirs(os.path.dirname(ani_path), exist_ok=True)
-        plot_3d_points(ani_path, SKELETON, rec_ric_data.squeeze().numpy(), None, [], title="Joints", dataset="humanml", fps=30, show_joints=False)
+        plot_3d_points(ani_path, SKELETON, rec_ric_data.squeeze().numpy(), None, [], title="Joints", dataset="humanml", fps=20, show_joints=False)
 
     prepare_mdm_dataset(hmr_dir, pose_dir, new_joints_dir, new_joint_vecs_dir, mdm_dir, dataset, category)
 

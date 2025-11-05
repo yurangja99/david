@@ -30,7 +30,7 @@ if __name__ == '__main__':
     #     hand_pose_relaxed = np.concatenate( (left_hand_pose, right_hand_pose) ).reshape(1, -1)
 
     params.task = params.task.replace(" ", "_")
-    mp4_pths = sorted(glob(f"{params.human_motion_dir}/{params.dataset}/{params.category}/human{params.epoch:09d}/{params.task},{params.category}/*/*.mp4"))
+    mp4_pths = sorted(glob(f"{params.human_motion_dir}/{params.dataset}/{params.category}/human{params.epoch:09d}/{params.task}/*/*.mp4"))
     print('\n'.join(mp4_pths))
     for input_path in mp4_pths:
         assert input_path.endswith('.mp4')

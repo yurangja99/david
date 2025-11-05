@@ -1,8 +1,14 @@
-import os, argparse, numpy as np
+import os, argparse, joblib, numpy as np
 from tqdm import tqdm
 from glob import glob
+from pathlib import Path
+import json
 import torch
+import pickle
 import smplx
+from imports.mdm.visualize import vis_utils
+from imports.mdm.data_loaders.humanml.utils import paramUtil
+from utils.visualize import plot_3d_points, get_object_vertices
 from pytorch3d.transforms import (
     quaternion_to_matrix, 
     matrix_to_axis_angle, 
@@ -74,6 +80,7 @@ SMPLX_JOINTS = [
     'right_ring1', 'right_ring2', 'right_ring3', 
     'right_thumb1', 'right_thumb2', 'right_thumb3'
 ]
+
 OMOMO_JOINTS = [
     'Pelvis',
     'L_Hip', 'L_Knee', 'L_Ankle', 'L_Toe',
@@ -170,10 +177,15 @@ def normalize(s: str) -> str:
     return ''.join(ch for ch in s.lower() if ch.isalnum())
 
 def same_sign_quaternions(q, q_next):
+    """
+    q, q_next: (..., 4) shape 쿼터니언 텐서
+    부호가 반대인지 아닌지 판단하고, 필요 시 부호를 맞춰 반환
+    """
     # 가장 큰 절대값 성분의 인덱스 찾기
     idx = torch.argmax(torch.abs(q))
     sign_q = torch.sign(q[idx])
     sign_q_next = torch.sign(q_next[idx])
+    
     same_sign = (sign_q == sign_q_next)
     return 1.0 if same_sign else -1.0
 
@@ -214,44 +226,6 @@ def get_reference(path, crop_start, blending_frame):
     return ref_data, ref_transl, ref_root_quat, ref_dof, ref_body_pos, ref_body_rot, \
         ref_obj_pos, ref_obj_quat, ref_contact_obj, ref_contact_human, smplx_body_pose, smplx_left_pose, smplx_right_pose
 
-def angle_and_Rz_from_xy_projection(v1: torch.Tensor, v2: torch.Tensor,
-                                    eps: float = 1e-8, return_degrees: bool = False):
-    """
-    v1, v2: shape [3], arbitrary 3D vectors
-    Returns:
-        theta: scalar tensor (radians by default; degrees if return_degrees=True)
-        Rz   : [3,3] rotation matrix about +Z that maps v1(xy) -> v2(xy) in the xy-plane
-            (column-vector convention: Rz @ v1_xy = v2_xy)
-            row-vector로 점을 회전시킬 경우에는 x @ Rz.T 를 사용하세요.
-    """
-    # xy 평면으로 프로젝션
-    v1_xy = v1.clone()
-    v2_xy = v2.clone()
-    v1_xy[2] = 0.0
-    v2_xy[2] = 0.0
-
-    # 단위화
-    n1 = torch.linalg.norm(v1_xy)
-    n2 = torch.linalg.norm(v2_xy)
-    u1 = v1_xy / n1
-    u2 = v2_xy / n2
-
-    # xy에서의 dot / cross_z 로 각도 산출
-    dot = (u1[0]*u2[0] + u1[1]*u2[1]).clamp(-1.0, 1.0)   # 수치 안정화
-    cross_z = u1[0]*u2[1] - u1[1]*u2[0]                  # 2D cross의 z성분
-    theta = torch.atan2(cross_z, dot)                    # v1 -> v2로 도는 부호 포함 각도
-
-    # z축 회전행렬 (column-vector convention)
-    c, s = torch.cos(theta), torch.sin(theta)
-    Rz = torch.tensor([[ c, -s, 0.],
-                    [ s,  c, 0.],
-                    [0., 0., 1.]], dtype=v1.dtype, device=v1.device)
-
-    if return_degrees:
-        theta = theta * (180.0 / torch.pi)
-
-    return theta, Rz
-
 def kabsch_weighted(X, Y, w):
     # X,Y: [N,3], w:[N,1]
     W = w / w.sum()
@@ -281,9 +255,14 @@ def solve_frame_6dof(X_obj, pL, RL, pR, RR, cL, cR, owner, w=None, irls_delta=0.
 
     useL = (owner==0)
     useR = (owner==1)
+    both = (owner<0)
 
     Y[useL]  = pL + (RL @ cL[useL].T).T
     Y[useR]  = pR + (RR @ cR[useR].T).T
+    if both.any():
+        YL = pL + (RL @ cL[both].T).T
+        YR = pR + (RR @ cR[both].T).T
+        Y[both] = 0.5*(YL+YR)
 
     # IRLS for robustness (Huber-like)
     R, t = kabsch_weighted(X_obj, Y, w)
@@ -299,8 +278,7 @@ def get_object_trajectory(
     hand_info,
     left_wrist_pos, right_wrist_pos, left_wrist_quat, right_wrist_quat, 
     ref_left_wrist_pos, ref_right_wrist_pos, ref_left_wrist_quat, ref_right_wrist_quat,
-    ref_obj_pos, ref_obj_quat
-):
+    ref_obj_pos, ref_obj_quat):
     # left_wrist_pos        [T, 3]
     # right_wrist_pos       [T, 3]
     # left_wrist_quat       [T, 4], xyzw
@@ -340,7 +318,7 @@ def get_object_trajectory(
         (ref_right_wrist_pos - ref_obj_pos) @ ref_obj_rot_inv.T + torch.tensor([0., -0.1, 0.]),
         (ref_right_wrist_pos - ref_obj_pos) @ ref_obj_rot_inv.T + torch.tensor([0., 0., -0.1]),
     ], dim=0)
-    global_pseudo_vertices = (pseudo_vertices @ ref_obj_rot.T) + ref_obj_pos
+    global_pseudo_vertices = (pseudo_vertices @ ref_obj_rot) + ref_obj_pos
     saved_left_points = (global_pseudo_vertices - ref_left_wrist_pos) @ ref_left_wrist_rot_inv.T
     saved_right_points = (global_pseudo_vertices - ref_right_wrist_pos) @ ref_right_wrist_rot_inv.T
 
@@ -367,7 +345,7 @@ def get_object_trajectory(
     result_t = torch.stack(result_t, dim=0)
     return result_t, matrix_to_quaternion(result_R)[..., [1, 2, 3, 0]]
 
-def main():
+def main_test():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default="FullBodyManip")
     ap.add_argument("--category", default="largetable")
@@ -376,8 +354,7 @@ def main():
     ap.add_argument("--object_motion_dir", type=str, default="results/inference/object_motion")
     ap.add_argument("--ref_path", type=str, default="data/InterAct/sub3_largetable_006.pt")
     ap.add_argument("--ref_crop_start", type=int, default=0)
-    ap.add_argument("--ref_bf", type=int, default=0)
-    ap.add_argument("--ref_sf", type=int, default=0)
+    ap.add_argument("--ref_blending_frame", type=int, default=0)
     ap.add_argument("--hand_info", type=int, default=0)
     args = ap.parse_args()
 
@@ -386,13 +363,15 @@ def main():
 
     # load reference
     ref_data, ref_transl, ref_root_quat, ref_dof, ref_body_pos, ref_body_rot, ref_obj_pos, ref_obj_quat, ref_contact_obj, ref_contact_human, \
-        ref_smplx_body_pose, ref_smplx_left_pose, ref_smplx_right_pose = get_reference(args.ref_path, args.ref_crop_start, args.ref_bf)
+        ref_smplx_body_pose, ref_smplx_left_pose, ref_smplx_right_pose = get_reference(args.ref_path, args.ref_crop_start, args.ref_blending_frame)
 
-    human_motion_pths = sorted(glob(f"{args.human_motion_dir}/{args.dataset}/{args.category}/*/*/*/*.npz"))
+    human_motion_pths = sorted(glob(f"{args.human_motion_dir}/{args.dataset}/{args.category}/human000000000/*/*/*.npz"))
+    human_motion_pths = human_motion_pths[:2]
     print("\n".join(human_motion_pths))
     os.makedirs(args.output_dir, exist_ok=True)
     for idx, human_pth in enumerate(tqdm(human_motion_pths)):
         data_pth = os.path.join(args.output_dir, f"sub0_{args.category.split('_')[0]}_{idx:03d}.pt")
+
         total_seen += 1
 
         # read human motions
@@ -426,34 +405,18 @@ def main():
         data = torch.zeros((frame_num, 591))
 
         # inpaint arm dof
-        smplx_left_pose = torch.zeros((frame_num, 15 * 3)).float()
-        smplx_right_pose = torch.zeros((frame_num, 15 * 3)).float()
-        smplx_poses[:args.ref_bf, 3:3+21*3] = ref_smplx_body_pose[:args.ref_bf].reshape(args.ref_bf, 21*3)
-        smplx_left_pose[:args.ref_bf] = ref_smplx_left_pose[:args.ref_bf].reshape(args.ref_bf, 15*3)
-        smplx_right_pose[:args.ref_bf] = ref_smplx_right_pose[:args.ref_bf].reshape(args.ref_bf, 15*3)
         if args.hand_info == 0:
-            smplx_poses[args.ref_bf:, 3+12*3:3+13*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 12].flatten()
-            smplx_poses[args.ref_bf:, 3+15*3:3+16*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 15].flatten()
-            smplx_poses[args.ref_bf:, 3+17*3:3+18*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 17].flatten()
-            smplx_poses[args.ref_bf:, 3+19*3:3+20*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 19].flatten()
-            smplx_poses[args.ref_bf:, 3+13*3:3+14*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 13].flatten()
-            smplx_poses[args.ref_bf:, 3+16*3:3+17*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 16].flatten()
-            smplx_poses[args.ref_bf:, 3+18*3:3+19*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 18].flatten()
-            smplx_poses[args.ref_bf:, 3+20*3:3+21*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 20].flatten()
-            smplx_left_pose[args.ref_bf:] = ref_smplx_left_pose[args.ref_bf-1:args.ref_bf].flatten()
-            smplx_right_pose[args.ref_bf:] = ref_smplx_right_pose[args.ref_bf-1:args.ref_bf].flatten()
+            smplx_poses[:, 3+12*3:3+21*3] = ref_smplx_body_pose[-1, 12:21].flatten()
         elif args.hand_info == 1:
-            smplx_poses[args.ref_bf:, 3+12*3:3+13*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 12].flatten()
-            smplx_poses[args.ref_bf:, 3+15*3:3+16*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 15].flatten()
-            smplx_poses[args.ref_bf:, 3+17*3:3+18*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 17].flatten()
-            smplx_poses[args.ref_bf:, 3+19*3:3+20*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 19].flatten()
-            smplx_left_pose[args.ref_bf:] = ref_smplx_left_pose[args.ref_bf-1:args.ref_bf].flatten()
+            smplx_poses[:, 3+12*3:3+13*3] = ref_smplx_body_pose[-1, 12].flatten()
+            smplx_poses[:, 3+15*3:3+16*3] = ref_smplx_body_pose[-1, 15].flatten()
+            smplx_poses[:, 3+17*3:3+18*3] = ref_smplx_body_pose[-1, 17].flatten()
+            smplx_poses[:, 3+19*3:3+20*3] = ref_smplx_body_pose[-1, 19].flatten()
         elif args.hand_info == 2:
-            smplx_poses[args.ref_bf:, 3+13*3:3+14*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 13].flatten()
-            smplx_poses[args.ref_bf:, 3+16*3:3+17*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 16].flatten()
-            smplx_poses[args.ref_bf:, 3+18*3:3+19*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 18].flatten()
-            smplx_poses[args.ref_bf:, 3+20*3:3+21*3] = ref_smplx_body_pose[args.ref_bf-1:args.ref_bf, 20].flatten()
-            smplx_right_pose[args.ref_bf:] = ref_smplx_right_pose[args.ref_bf-1:args.ref_bf].flatten()
+            smplx_poses[:, 3+13*3:3+14*3] = ref_smplx_body_pose[-1, 13].flatten()
+            smplx_poses[:, 3+16*3:3+17*3] = ref_smplx_body_pose[-1, 16].flatten()
+            smplx_poses[:, 3+18*3:3+19*3] = ref_smplx_body_pose[-1, 18].flatten()
+            smplx_poses[:, 3+20*3:3+21*3] = ref_smplx_body_pose[-1, 20].flatten()
         
         # forward kinematics
         smplxmodel = smplx.create(model_path="imports/mdm/body_models/smplx/SMPLX_NEUTRAL.npz", model_type="smplx", num_pca_comps=45)
@@ -461,8 +424,8 @@ def main():
             betas=betas.reshape(1, 10).repeat((frame_num, 1)).float(),
             global_orient=smplx_poses[:frame_num, :3].float(),
             body_pose=smplx_poses[:frame_num, 3:3+21*3].float(),
-            left_hand_pose=smplx_left_pose[:frame_num],
-            right_hand_pose=smplx_right_pose[:frame_num],
+            left_hand_pose=ref_smplx_left_pose[-1].reshape(1, 45).repeat((frame_num, 1)),
+            right_hand_pose=ref_smplx_right_pose[-1].reshape(1, 45).repeat((frame_num, 1)),
             transl=smplx_trans[:frame_num, :3].float(),
             expression=torch.zeros((frame_num, 10)).float(),
             jaw_pose=torch.zeros((frame_num, 3)).float(),
@@ -495,156 +458,339 @@ def main():
                     )
                 elif 21 <= sidx < 36:
                     omomo_dof_pos[:, oidx] = transpose_axis_angle_smplx_to_intermimic(
-                        smplx_left_pose[:frame_num, (sidx-21)*3:(sidx-21+1)*3].float()
+                        ref_smplx_left_pose[-1:, sidx-21].float()
                     )
                 elif 36 <= sidx < 51:
                     omomo_dof_pos[:, oidx] = transpose_axis_angle_smplx_to_intermimic(
-                        smplx_right_pose[:frame_num, (sidx-36)*3:(sidx-36+1)*3].float()
+                        ref_smplx_right_pose[-1:, sidx-36].float()
                     )
 
-        # orientation: ref를 sample에 맞추기
-        lidx, ridx = 17, 36 # wrists
-        #lidx, ridx = 3, 7   # ankles
-        _, C = angle_and_Rz_from_xy_projection(
-            torch.cross(
-                ref_body_pos[-1, 0, :] - ref_body_pos[-1, lidx, :],
-                ref_body_pos[-1, 0, :] - ref_body_pos[-1, ridx, :]
-            ),
-            torch.cross(
-                omomo_body_pos[args.ref_bf, 0, :] - omomo_body_pos[args.ref_bf, lidx, :],
-                omomo_body_pos[args.ref_bf, 0, :] - omomo_body_pos[args.ref_bf, ridx, :]
-            )
-        )
+        # reference, sample 맞추기
+        # ref_transl, ref_root_quat, ref_dof, ref_body_pos, ref_body_rot, 
+        # ref_obj_pos, ref_obj_quat, ref_contact_obj, ref_contact_human
+        
+        # root orientation: y축(위쪽) 회전만 해서 ref를 sample에 맞추기
+        def rz_torch(theta):  # theta: (...,)
+            c, s = torch.cos(theta), torch.sin(theta)
+            z = torch.zeros_like(theta)
+            o = torch.ones_like(theta)
+            R = torch.stack([
+                torch.stack([ c, -s, z], dim=-1),
+                torch.stack([ s,  c, z], dim=-1),
+                torch.stack([ z,  z, o], dim=-1),
+            ], dim=-2)  # (...,3,3)
+            return R
+        def solve_C_global_z_torch(A, B):
+            # A,B: (...,3,3)
+            Arel = B @ A.transpose(-1, -2)
+            a = Arel[..., 1, 0] - Arel[..., 0, 1]
+            b = Arel[..., 0, 0] + Arel[..., 1, 1]
+            theta = torch.atan2(a, b)
+            C = rz_torch(theta)
+            return C, theta  # apply: A2 = C @ A
+        ref_root_rot = quaternion_to_matrix(ref_root_quat[-1, :])
+        root_rot = axis_angle_to_matrix(transpose_axis_angle_smplx_to_intermimic(smplx_poses[args.ref_blending_frame-1:args.ref_blending_frame, :3]))[0]
+        C, _ = solve_C_global_z_torch(ref_root_rot, root_rot)
 
         # trans: ref를 sample에 맞추기
-        # D = omomo_body_pos[args.ref_bf-1:args.ref_bf, 0, :] - (ref_transl[-1:] @ C.T)
-        D = 0.5 * (omomo_body_pos[args.ref_bf:args.ref_bf+1, lidx, :] - (ref_body_pos[-1:, lidx, :] @ C.T)) + \
-            0.5 * (omomo_body_pos[args.ref_bf:args.ref_bf+1, ridx, :] - (ref_body_pos[-1:, ridx, :] @ C.T))
+        D = omomo_body_pos[args.ref_blending_frame-1:args.ref_blending_frame, 0, :] - (ref_transl[-1:] @ C.T)
         D[..., 2] = 0.0
 
         # 높이: sample을 ref에 맞추기
-        # H = (ref_transl[-1:] @ C.T) - omomo_body_pos[args.ref_bf-1:args.ref_bf, 0, :]
-        H = 0.5 * ((ref_body_pos[-1:, lidx, :] @ C.T) - omomo_body_pos[args.ref_bf:args.ref_bf+1, lidx, :]) + \
-            0.5 * ((ref_body_pos[-1:, ridx, :] @ C.T) - omomo_body_pos[args.ref_bf:args.ref_bf+1, ridx, :])
+        H = (ref_transl[-1:] @ C.T) - omomo_body_pos[args.ref_blending_frame-1:args.ref_blending_frame, 0, :]
         H[..., :2] = 0.0
 
         # root_pos: data[:, 0:3]
         data[:, 0:3] = omomo_body_pos[:, 0, :] + H
-        data[:args.ref_bf, 0:3] = (ref_transl @ C.T) + D
+        data[:args.ref_blending_frame, 0:3] = (ref_transl @ C.T) + D
 
         # root_rot: data[:, 3:7] (xyzw quat)
         data[:, [6, 3, 4, 5]] = axis_angle_to_quaternion(transpose_axis_angle_smplx_to_intermimic(
             smplx_poses[:frame_num, :3]
         ))
-        data[:args.ref_bf, [6, 3, 4, 5]] = quaternion_multiply(matrix_to_quaternion(C), ref_root_quat)
-        data[args.ref_bf:, [6, 3, 4, 5]] *= same_sign_quaternions(data[args.ref_bf, [6, 3, 4, 5]], data[args.ref_bf-1, [6, 3, 4, 5]])
+        data[:args.ref_blending_frame, [6, 3, 4, 5]] = quaternion_multiply(matrix_to_quaternion(C), ref_root_quat)
         
         # dof_pos: data[:, 9:9+51*3]
         data[:, 9:9+51*3] = omomo_dof_pos.reshape(frame_num, 51*3)
-        # data[:args.ref_bf, 9:9+51*3] = ref_dof.reshape(args.ref_bf, 51*3)
-        if args.hand_info == 0:
-            data[args.ref_bf:, 9+(14)*3:9+(15+17)*3] = data[args.ref_bf-1, 9+(14)*3:9+(15+17)*3]
-            data[args.ref_bf:, 9+(33)*3:9+(34+17)*3] = data[args.ref_bf-1, 9+(33)*3:9+(34+17)*3]
-            # data[args.ref_bf:, 9+(15)*3:9+(15+17)*3] = ref_data[args.ref_bf-1, 9+(15)*3:9+(15+17)*3]
-            # data[args.ref_bf:, 9+(34)*3:9+(34+17)*3] = ref_data[args.ref_bf-1, 9+(34)*3:9+(34+17)*3]
-        elif args.hand_info == 1:
-            data[args.ref_bf:, 9+(14)*3:9+(15+17)*3] = data[args.ref_bf-1, 9+(14)*3:9+(15+17)*3]
-        elif args.hand_info == 2:
-            data[args.ref_bf:, 9+(33)*3:9+(34+17)*3] = data[args.ref_bf-1, 9+(33)*3:9+(34+17)*3]
+        data[:args.ref_blending_frame, 9:9+51*3] = ref_dof.reshape(args.ref_blending_frame, 51*3)
+        # data[args.ref_blending_frame:, 9+(14)*3:9+(15+17)*3] = data[args.ref_blending_frame-1, 9+(14)*3:9+(15+17)*3]
+        # data[args.ref_blending_frame:, 9+(33)*3:9+(34+17)*3] = data[args.ref_blending_frame-1, 9+(33)*3:9+(34+17)*3]
+        # data[args.ref_blending_frame:, 9+(15)*3:9+(15+17)*3] = ref_data[args.ref_blending_frame-1, 9+(15)*3:9+(15+17)*3]
+        # data[args.ref_blending_frame:, 9+(34)*3:9+(34+17)*3] = ref_data[args.ref_blending_frame-1, 9+(34)*3:9+(34+17)*3]
         
         # body_pos: data[:, 162:162+52*3]
         data[:, 162:162+52*3] = (omomo_body_pos + H).reshape(frame_num, 52*3)
-        data[:args.ref_bf, 162:162+52*3] = ((ref_body_pos @ C.T) + D).reshape(args.ref_bf, 52*3)
+        data[:args.ref_blending_frame, 162:162+52*3] = ((ref_body_pos @ C.T) + D).reshape(args.ref_blending_frame, 52*3)
         
         # contact_obj: data[:, 330:331]
         data[:, 330:331] = 1.0
-        data[:args.ref_bf, 330] = ref_contact_obj
+        data[:args.ref_blending_frame, 330] = ref_contact_obj
         
         # contact_human: data[:, 331:331+52]
         no_touch = [331 + i for i in [0, 1, 2, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 33, 34, 35]]
         data[:, no_touch] = -1.0
-        data[:args.ref_bf, 331:331+52] = ref_contact_human
         if args.hand_info == 0:
             data[:, 331+17:331+17+16] = 1.0
             data[:, 331+36:331+36+16] = 1.0
         elif args.hand_info == 1:
             data[:, 331+17:331+17+16] = 1.0
-            data[:, 331+36:331+36+16] = -1.0
         elif args.hand_info == 2:
-            data[:, 331+17:331+17+16] = -1.0
             data[:, 331+36:331+36+16] = 1.0
+        data[:args.ref_blending_frame, 331:331+52] = ref_contact_human
         
         # body_rot: data[:, 383:383+52*4] (xyzw quat)
         data[:, 383:383+52*4] = axis_angle_to_quaternion(omomo_body_rot)[..., [1, 2, 3, 0]].reshape(frame_num, 52*4)
-        data[:args.ref_bf, 383:383+52*4] = quaternion_multiply(matrix_to_quaternion(C), ref_body_rot[..., [3, 0, 1, 2]])[..., [1, 2, 3, 0]].reshape(args.ref_bf, 52*4)
+        data[:args.ref_blending_frame, 383:383+52*4] = quaternion_multiply(matrix_to_quaternion(C), ref_body_rot[..., [3, 0, 1, 2]])[..., [1, 2, 3, 0]].reshape(args.ref_blending_frame, 52*4)
         
         # not used: data[:, 7:9], data[:, 325:330]
         data[:, 7:9] = 0.0
         data[:, 325:330] = 0.0
 
-        # human motion interpolation
-        delta_t = args.ref_sf
-        w = torch.arange(1/delta_t, (delta_t+1)/delta_t, 1/delta_t).unsqueeze(-1)
-        data[args.ref_bf:args.ref_bf+delta_t] = w * data[args.ref_bf:args.ref_bf+delta_t] + (1 - w) * data[args.ref_bf-1]
-        
+        # w = torch.arange(1/15, 16/15, 1/15).unsqueeze(-1)
+        # data[args.ref_blending_frame:args.ref_blending_frame+15] = w * data[args.ref_blending_frame:args.ref_blending_frame+15] + (1 - w) * reference[args.ref_blending_frame:args.ref_blending_frame+15]
+        # w = torch.arange(1/15, 16/15, 1/15).unsqueeze(-1)
+        # data[args.ref_blending_frame:args.ref_blending_frame+15] = w * data[args.ref_blending_frame:args.ref_blending_frame+15] + (1 - w) * data[args.ref_blending_frame-1]
+
         obj_pos, obj_quat = get_object_trajectory(
             hand_info=args.hand_info,
-            left_wrist_pos=data[args.ref_bf:, 162+17*3:162+18*3],
-            right_wrist_pos=data[args.ref_bf:, 162+36*3:162+37*3],
-            left_wrist_quat=data[args.ref_bf:, 383+17*4:383+18*4],
-            right_wrist_quat=data[args.ref_bf:, 383+36*4:383+37*4],
-            ref_left_wrist_pos=ref_body_pos[-1, 17], 
-            ref_right_wrist_pos=ref_body_pos[-1, 36],
-            ref_left_wrist_quat=ref_body_rot[-1, 17],
-            ref_right_wrist_quat=ref_body_rot[-1, 36],
-            ref_obj_pos=ref_obj_pos[-1],
-            ref_obj_quat=ref_obj_quat[-1, [1, 2, 3, 0]],
-            # ref_left_wrist_pos=data[args.ref_bf-1, 162+17*3:162+18*3],
-            # ref_right_wrist_pos=data[args.ref_bf-1, 162+36*3:162+37*3],
-            # ref_left_wrist_quat=data[args.ref_bf-1, 383+17*4:383+18*4],
-            # ref_right_wrist_quat=data[args.ref_bf-1, 383+36*4:383+37*4],
-            # ref_obj_pos=(ref_data[-1, 318:321] @ C.T) + D,
-            # ref_obj_quat=quaternion_multiply(matrix_to_quaternion(C), ref_data[args.ref_bf-1, [324, 321, 322, 323]])[..., [1, 2, 3, 0]],
+            left_wrist_pos=data[args.ref_blending_frame:, 162+17*3:162+18*3],
+            right_wrist_pos=data[args.ref_blending_frame:, 162+36*3:162+37*3],
+            left_wrist_quat=data[args.ref_blending_frame:, 383+17*4:383+18*4],
+            right_wrist_quat=data[args.ref_blending_frame:, 383+36*4:383+37*4],
+            ref_left_wrist_pos=data[args.ref_blending_frame-1, 162+17*3:162+18*3],
+            ref_right_wrist_pos=data[args.ref_blending_frame-1, 162+36*3:162+37*3],
+            ref_left_wrist_quat=data[args.ref_blending_frame-1, 383+17*4:383+18*4],
+            ref_right_wrist_quat=data[args.ref_blending_frame-1, 383+36*4:383+37*4],
+            ref_obj_pos=(ref_data[-1, 318:321] @ C.T) + D,
+            ref_obj_quat=quaternion_multiply(matrix_to_quaternion(C), ref_data[args.ref_blending_frame-1, [324, 321, 322, 323]])[..., [1, 2, 3, 0]],
         )
 
         # obj_pos: data[:, 318:321]
-        data[:args.ref_bf, 318:321] = (ref_data[:, 318:321] @ C.T) + D
-        data[args.ref_bf:, 318:321] = obj_pos
+        data[:args.ref_blending_frame, 318:321] = (ref_data[:, 318:321] @ C.T) + D
+        data[args.ref_blending_frame:, 318:321] = obj_pos
 
-        data[:args.ref_bf, 321:325] = quaternion_multiply(matrix_to_quaternion(C), ref_data[:, [324, 321, 322, 323]])[..., [1, 2, 3, 0]]
-        data[args.ref_bf:, 321:325] = obj_quat
-        data[args.ref_bf:, 321:325] *= same_sign_quaternions(data[args.ref_bf-1, 321:325], data[args.ref_bf, 321:325])
-
-        # interpolation
-        # w = torch.arange(1/15, 16/15, 1/15).unsqueeze(-1)
-        # data[args.ref_bf:args.ref_bf+15] = w * data[args.ref_bf:args.ref_bf+15] + (1 - w) * data[args.ref_bf-1]
-        # data[args.ref_bf:args.ref_bf+15, 0:3] = w * data[args.ref_bf:args.ref_bf+15, 0:3] + (1 - w) * data[args.ref_bf-1, 0:3]
-        # data[args.ref_bf:args.ref_bf+15, 162:162+52*3] = w * data[args.ref_bf:args.ref_bf+15, 162:162+52*3] + (1 - w) * data[args.ref_bf-1, 162:162+52*3]
-        # data[args.ref_bf:args.ref_bf+15, 318:321] = w * data[args.ref_bf:args.ref_bf+15, 318:321] + (1 - w) * data[args.ref_bf-1, 318:321]
-        # data[args.ref_bf:args.ref_bf+15, 9:9+51*3] = w * data[args.ref_bf:args.ref_bf+15, 9:9+51*3] + (1 - w) * data[args.ref_bf-1, 9:9+51*3]
-        # for i in range(15):
-        #     ww = 1 - (i + 1) / 15
-        #     data[args.ref_bf+i, [6, 3, 4, 5]] = slerp_wxyz(
-        #         data[args.ref_bf-1, [6, 3, 4, 5]], 
-        #         data[args.ref_bf+i, [6, 3, 4, 5]],
-        #         ww
-        #     )
-        #     data[args.ref_bf+i, [324, 321, 322, 323]] = slerp_wxyz(
-        #         data[args.ref_bf-1, [324, 321, 322, 323]],
-        #         data[args.ref_bf+i, [324, 321, 322, 323]],
-        #         ww
-        #     )
-        #     for j in range(52):
-        #         data[args.ref_bf+i, 383+(j)*4:383+(j+1)*4] = slerp_wxyz(
-        #             data[args.ref_bf-1, 383+(j)*4:383+(j+1)*4][..., [3, 0, 1, 2]],
-        #             data[args.ref_bf+i, 383+(j)*4:383+(j+1)*4][..., [3, 0, 1, 2]],
-        #             ww
-        #         )[..., [1, 2, 3, 0]]
+        data[:args.ref_blending_frame, 321:325] = quaternion_multiply(matrix_to_quaternion(C), ref_data[:, [324, 321, 322, 323]])[..., [1, 2, 3, 0]]
+        data[args.ref_blending_frame:, 321:325] = obj_quat
 
         torch.save(data, data_pth)
         total_saved += 1
+        if total_saved % 50 == 0:
+            print(f"[info] saved {total_saved} sequences ...")
+    
+    print(f"[done] seen={total_seen}, saved={total_saved}")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", default="FullBodyManip")
+    ap.add_argument("--category", default="largetable")
+    ap.add_argument("--output_dir", default="data/InterAct_new", help="InterAct 데이터셋 폴더 주소")
+    ap.add_argument("--human_motion_dir", type=str, default="results/inference/human_motion")
+    ap.add_argument("--object_motion_dir", type=str, default="results/inference/object_motion")
+    ap.add_argument("--ref_path", type=str, default="data/InterAct/sub3_largetable_006.pt")
+    ap.add_argument("--ref_crop_start", type=int, default=0)
+    ap.add_argument("--ref_blending_frame", type=int, default=0)
+    args = ap.parse_args()
+
+    total_saved = 0
+    total_seen = 0
+
+    human_motion_pths = sorted(glob(f"{args.human_motion_dir}/{args.dataset}/{args.category}/human000000000/*/*/*.npz"))
+    obj_motion_pths = [human_pth.replace(args.human_motion_dir, args.object_motion_dir).replace(".npz", ".pkl") for human_pth in human_motion_pths]
+    print("\n".join(human_motion_pths))
+    os.makedirs(args.output_dir, exist_ok=True)
+    for idx, (human_pth, obj_pth) in enumerate(zip(tqdm(human_motion_pths), obj_motion_pths)):
+        data_pth = os.path.join(args.output_dir, f"sub0_{args.category.split('_')[0]}_{idx:03d}.pt")
+        # if os.path.exists(data_pth): continue
+        # if not os.path.exists(obj_pth): continue
+
+        total_seen += 1
+
+        # read human/obj motions
+        human_motion = np.load(human_pth)
+        with open(obj_pth, "rb") as f:
+            obj_motion = pickle.load(f)
+        
+        # human_motion
+        # poses: (T, 55*3)
+        # betas: (10,)
+        # trans: (T, 3)
+        # mocap_frame_rate: 30
+        # gender: "neutral"
+        
+        # obj_motion
+        # R: (T, 3, 3)
+        # t: (T, 3, 1)
+        # shifted_t: []
+        # average_scale: 1.0
+
+        # initialize data
+        frame_num = min(human_motion["poses"].shape[0], obj_motion['R'].shape[0])
+        data = torch.zeros((frame_num, 591))
+
+        # forward kinematics
+        smplxmodel = smplx.create(model_path="imports/mdm/body_models/smplx/SMPLX_NEUTRAL.npz", model_type="smplx", num_pca_comps=45)
+        global_smplxmodel_output = smplxmodel(
+            betas=torch.from_numpy(human_motion["betas"].reshape((1, 10))).repeat((frame_num, 1)).float(),
+            global_orient=torch.from_numpy(human_motion["poses"][:frame_num, :3]).float(),
+            body_pose=torch.from_numpy(human_motion["poses"][:frame_num, 3:3+21*3]).float(),
+            left_hand_pose=torch.zeros((frame_num, 45)).float(),
+            right_hand_pose=torch.zeros((frame_num, 45)).float(),
+            transl=torch.from_numpy(human_motion["trans"][:frame_num, :3]).float(),
+            expression=torch.zeros((frame_num, 10)).float(),
+            jaw_pose=torch.zeros((frame_num, 3)).float(),
+            leye_pose=torch.zeros((frame_num, 3)).float(),
+            reye_pose=torch.zeros((frame_num, 3)).float(),
+            return_verts=True,
+            return_full_pose=True,
+        )
+        global_vertices = global_smplxmodel_output.vertices.to(torch.float32).cpu() # (T, 10475, 3)
+        global_joints = global_smplxmodel_output.joints.to(torch.float32).cpu()[:, :55, :] # (T, 127, 3)
+        local_joint_rot = global_smplxmodel_output.full_pose[:, :55*3].reshape(frame_num, 55, 3) # (T, 55, 3)
+        global_joint_rot = get_absolute_joint_rotations(local_joint_rot, smplxmodel)
+
+        min_y = global_vertices[..., 1].min()
+        global_vertices[..., 1] -= min_y
+        global_joints[..., 1] -= min_y
+
+        # SMPLX -> OMOMO
+        omomo_body_pos = torch.zeros((frame_num, 52, 3), dtype=torch.float32)
+        omomo_body_rot = torch.zeros((frame_num, 52, 3), dtype=torch.float32)
+        omomo_dof_pos = torch.zeros((frame_num, 51, 3), dtype=torch.float32)
+        for omomo_joint, smplx_joint in OMOMO_TO_SMPLX.items():
+            if omomo_joint in OMOMO_JOINTS and smplx_joint in SMPLX_JOINTS:
+                oidx = OMOMO_JOINTS.index(omomo_joint)
+                sidx = SMPLX_JOINTS.index(smplx_joint)
+                if 0 <= sidx < 22 or 25 <= sidx < 40 or 40 <= sidx < 55:
+                    omomo_body_pos[:, oidx] = transpose_transl_smplx_to_intermimic(global_joints[:, sidx])
+                    omomo_body_rot[:, oidx] = transpose_axis_angle_smplx_to_intermimic(global_joint_rot[:, sidx])
+            if omomo_joint in OMOMO_POSE_JOINTS and smplx_joint in SMPLX_POSE_JOINTS:
+                oidx = OMOMO_POSE_JOINTS.index(omomo_joint)
+                sidx = SMPLX_POSE_JOINTS.index(smplx_joint)
+                if 0 <= sidx < 21:
+                    omomo_dof_pos[:, oidx] = transpose_axis_angle_smplx_to_intermimic(
+                        torch.from_numpy(human_motion["poses"][:frame_num, 3+sidx*3:3+(sidx+1)*3]).float()
+                    )
+
+        if "smallbox" in args.category or "clothesstand_left_hand" in args.category:
+            Z_ROT = torch.tensor([
+                [-1., 0., 0.],
+                [0., -1., 0.],
+                [0., 0., 1.]
+            ]).float()
+        else:
+            Z_ROT = torch.tensor([
+                [0.0, 1.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]).float()
+        Z_QUAT = matrix_to_quaternion(Z_ROT)
+
+        # root_pos: data[:, 0:3]
+        data[:, 0:3] = omomo_body_pos[:, 0, :] @ Z_ROT.T
+
+        # root_rot: data[:, 3:7] (xyzw quat)
+        data[:, [6, 3, 4, 5]] = quaternion_multiply(Z_QUAT, axis_angle_to_quaternion(transpose_axis_angle_smplx_to_intermimic(
+            torch.from_numpy(human_motion["poses"][:frame_num, :3]).float()
+        )))
+        
+        # dof_pos: data[:, 9:9+51*3]
+        data[:, 9:9+51*3] = omomo_dof_pos.reshape(frame_num, 51*3)
+        
+        # body_pos: data[:, 162:162+52*3]
+        data[:, 162:162+52*3] = (omomo_body_pos @ Z_ROT.T).reshape(frame_num, 52*3)
+        
+        # obj_pos: data[:, 318:321]
+        data[:, 318:321] = transpose_transl_smplx_to_intermimic(
+            torch.from_numpy(obj_motion["t"][:frame_num, :, 0]).float()
+        ) @ Z_ROT.T
+        
+        # obj_rot: data[:, 321:325] (xyzw quat)
+        # COMPATIBILITY_MATRIX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+        # ROT_OFS = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        # ROT_OFS_INV = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        # data[:, [324, 321, 322, 323]] = matrix_to_quaternion(
+        #     torch.from_numpy(COMPATIBILITY_MATRIX.T @ obj_motion["R"][:frame_num] @ COMPATIBILITY_MATRIX @ ROT_OFS_INV).float()
+        # )
+        NEW_ROT_OFS = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])    # x축 기준 -90도 회전
+        NEW_ROT_OFS_INV = np.linalg.inv(NEW_ROT_OFS)
+        data[:, [324, 321, 322, 323]] = matrix_to_quaternion(
+            torch.from_numpy(NEW_ROT_OFS_INV @ obj_motion["R"][:frame_num]).float()
+        )
+        if "smallbox" in args.category or "clothesstand_left_hand" in args.category:
+            data[:, [324, 321, 322, 323]] = quaternion_multiply(
+                matrix_to_quaternion(torch.tensor([
+                    [0.0, 1.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]).float()), data[:, [324, 321, 322, 323]]
+            )
+        
+        # contact_obj: data[:, 330:331]
+        data[:, 330:331] = 1.0
+        
+        # contact_human: data[:, 331:331+52]
+        no_touch = [331 + i for i in [0, 1, 2, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 33, 34, 35]]
+        data[:, no_touch] = -1.0
+        data[:, 331+17:331+17+16] = 1.0
+        data[:, 331+36:331+36+16] = 1.0
+        
+        # body_rot: data[:, 383:383+52*4] (xyzw quat)
+        data[:, 383:383+52*4] = quaternion_multiply(Z_QUAT, axis_angle_to_quaternion(omomo_body_rot))[..., [1, 2, 3, 0]].reshape(frame_num, 52*4)
+        
+        # not used: data[:, 7:9], data[:, 325:330]
+        data[:, 7:9] = 0.0
+        data[:, 325:330] = 0.0
+
+        # interpolation: 20FPS -> 30FPS
+        data_t = data.transpose(0, 1).unsqueeze(0)  # shape: [1, 591, T]
+        target_len = int(frame_num * 30 / 20)
+        upsampled = torch.nn.functional.interpolate(data_t, size=target_len, mode='linear', align_corners=True)
+        upsampled = upsampled.squeeze(0).transpose(0, 1)
+
+        # inpainting reference
+        reference = torch.load(args.ref_path)
+        contact_mask = reference[:, 330] > 0.5
+        contact_idx = torch.nonzero(contact_mask.flatten(), as_tuple=True)[0]
+        t1 = int(contact_idx[0]) + args.ref_crop_start
+        reference = reference[t1:]
+
+        upsampled[:args.ref_blending_frame] = reference[:args.ref_blending_frame]
+        gap = reference[args.ref_blending_frame, 0:3] - upsampled[args.ref_blending_frame, 0:3]; gap[2] = 0.0   # gap of root trans
+        upsampled[args.ref_blending_frame:, 0:3] += gap  # root trans
+        upsampled[args.ref_blending_frame:, 162:162+52*3] = (upsampled[args.ref_blending_frame:, 162:162+52*3].reshape(-1, 3) + gap).reshape(-1, 52*3)    # body_pos trans
+        obj_gap = reference[args.ref_blending_frame, 318:321] - upsampled[args.ref_blending_frame, 318:321]; obj_gap[2] = 0.0
+        upsampled[args.ref_blending_frame:, 318:321] += obj_gap  # obj trans
+        if "largetable_carry" in args.category:
+            upsampled[args.ref_blending_frame:, 319] -= 0.10
+            upsampled[args.ref_blending_frame:, 320] += 0.10
+        elif "largetable_lift" in args.category:
+            upsampled[args.ref_blending_frame:, 318] += 0.05
+        elif "smallbox" in args.category:
+            upsampled[args.ref_blending_frame:, 318] -= 0.1
+            upsampled[args.ref_blending_frame:, 320] += 0.1
+        elif "clothesstand_left_hand" in args.category:
+            upsampled[args.ref_blending_frame:, 318] += 0.25
+            upsampled[args.ref_blending_frame:, 319] += 0.1
+        elif "clothesstand_right_hand" in args.category:
+            upsampled[args.ref_blending_frame:, 318] += 0.05
+            upsampled[args.ref_blending_frame:, 319] += 0.05
+        elif "clothesstand_two_hands" in args.category: 
+            upsampled[args.ref_blending_frame:, 318] -= 0.5
+            upsampled[args.ref_blending_frame:, 319] += 0.05
+        upsampled[args.ref_blending_frame:, 3:7] *= same_sign_quaternions(upsampled[args.ref_blending_frame, 3:7], upsampled[args.ref_blending_frame-1, 3:7])  # root rot
+        upsampled[args.ref_blending_frame:, 321:325] *= same_sign_quaternions(upsampled[args.ref_blending_frame, 321:325], upsampled[args.ref_blending_frame-1, 321:325])  # obj rot        
+        upsampled[args.ref_blending_frame:, 9+(15)*3:9+(16+16)*3] = upsampled[args.ref_blending_frame-1, 9+(15)*3:9+(16+16)*3]  # DOF left hand
+        upsampled[args.ref_blending_frame:, 9+(34)*3:9+(35+16)*3] = upsampled[args.ref_blending_frame-1, 9+(34)*3:9+(35+16)*3]  # DOF right hand
+
+        w = torch.arange(1/15, 16/15, 1/15).unsqueeze(-1)
+        upsampled[args.ref_blending_frame:args.ref_blending_frame+15] = w * upsampled[args.ref_blending_frame:args.ref_blending_frame+15] + (1 - w) * reference[args.ref_blending_frame:args.ref_blending_frame+15]
+
+        torch.save(upsampled, data_pth)
+        total_saved += 1
+        if total_saved % 50 == 0:
+            print(f"[info] saved {total_saved} sequences ...")
     
     print(f"[done] seen={total_seen}, saved={total_saved}")
 
 if __name__ == "__main__":
-    main()
+    main_test()

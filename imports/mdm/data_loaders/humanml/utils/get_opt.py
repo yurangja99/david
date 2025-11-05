@@ -55,8 +55,8 @@ def get_opt(opt_path, device, david_dataset, david_category):
     opt.meta_dir = pjoin(opt.save_root, 'meta')
 
     if opt.dataset_name == 't2m':
-        # opt.data_root = f'imports/mdm/dataset/HumanML3D'
-        opt.data_root = f'results/david/mdm/{david_dataset}/{david_category}'
+        opt.data_root = f'imports/mdm/dataset/HumanML3D'
+        # opt.data_root = f'results/data_ours/mdm/{david_dataset}/{david_category}'   # added by yurangja99
         opt.motion_dir = pjoin(opt.data_root, 'new_joint_vecs')
         opt.text_dir = pjoin(opt.data_root, 'texts')
         opt.joints_num = 22
